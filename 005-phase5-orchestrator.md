@@ -1705,19 +1705,19 @@ ray.internal  → Internal ALB (Alias)
 
 ### Single GPU Training
 
-https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/main/assets/osmo-single-gpu-mlflow.mp4
+<video src="https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/refs/heads/main/assets/osmo-single-gpu-mlflow.mp4" controls width="100%"></video>
 
 ### Single GPU Spot Monitoring
 
-https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/main/assets/osmo-single-gpu-spot-monitoring.mp4
+<video src="https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/refs/heads/main/assets/osmo-single-gpu-spot-monitoring.mp4" controls width="100%"></video>
 
 ### Multi GPU Training
 
-https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/main/assets/osmo-other-taps-multi-gpu.mp4
+<video src="https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/refs/heads/main/assets/osmo-other-taps-multi-gpu.mp4" controls width="100%"></video>
 
 ### Multi Node Training
 
-https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/main/assets/osmo-multi-node.mp4
+<video src="https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/refs/heads/main/assets/osmo-multi-node.mp4" controls width="100%"></video>
 
 ---
 
