@@ -1,0 +1,63 @@
+################################################################################
+# PodDisruptionBudgets for Phase 05 - Orchestrator
+#
+# Ensures minimum availability during voluntary disruptions (node drains,
+# cluster upgrades, etc.) for critical orchestration components.
+################################################################################
+
+# ===========================================================================
+# 1. OSMO Controller PDB (orchestration namespace)
+# ===========================================================================
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: osmo-controller-pdb
+  namespace: orchestration
+  labels:
+    app.kubernetes.io/name: osmo-controller
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: orchestration
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: osmo-controller
+
+# ===========================================================================
+# 2. Ray Head PDB (training namespace)
+# ===========================================================================
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ray-head-pdb
+  namespace: training
+  labels:
+    app.kubernetes.io/name: ray-head
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: training
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      ray.io/node-type: head
+
+# ===========================================================================
+# 3. KubeRay Operator PDB (ray-system namespace)
+# ===========================================================================
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kuberay-operator-pdb
+  namespace: ray-system
+  labels:
+    app.kubernetes.io/name: kuberay-operator
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: ray-operator
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kuberay-operator

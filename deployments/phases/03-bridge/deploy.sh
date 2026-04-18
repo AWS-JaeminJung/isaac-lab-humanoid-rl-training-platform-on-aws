@@ -103,7 +103,14 @@ if [[ -x "${SCRIPT_DIR}/scripts/configure-node-labels.sh" ]]; then
 fi
 step_end $?
 
-# Step 4: Validation
+# Step 4: Install NVIDIA Device Plugin
+step_start "Install NVIDIA Device Plugin on on-prem nodes"
+if [[ -x "${SCRIPT_DIR}/scripts/install-device-plugin.sh" ]]; then
+    "${SCRIPT_DIR}/scripts/install-device-plugin.sh"
+fi
+step_end $?
+
+# Step 5: Validation
 if [[ "${SKIP_VALIDATE}" != "true" ]]; then
     step_start "Post-deploy validation"
     if [[ -x "${VALIDATE_SCRIPT}" ]]; then

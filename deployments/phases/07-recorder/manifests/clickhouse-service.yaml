@@ -1,0 +1,29 @@
+################################################################################
+# ClickHouse Service
+#
+# ClusterIP service exposing the ClickHouse HTTP API (8123) and native
+# protocol (9000) for internal cluster access.
+################################################################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: clickhouse
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: recorder
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  type: ClusterIP
+  selector:
+    app: clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+      protocol: TCP
+    - name: native
+      port: 9000
+      targetPort: 9000
+      protocol: TCP

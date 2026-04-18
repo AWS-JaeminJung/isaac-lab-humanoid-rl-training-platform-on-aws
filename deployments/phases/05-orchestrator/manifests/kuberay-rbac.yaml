@@ -1,0 +1,78 @@
+################################################################################
+# KubeRay Operator RBAC
+#
+# ServiceAccount, ClusterRole, and ClusterRoleBinding for the KubeRay Operator.
+# Grants permissions to manage Ray CRDs, pods, services, secrets, configmaps,
+# batch jobs, and events across namespaces.
+################################################################################
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuberay-operator-sa
+  namespace: ray-system
+  labels:
+    app.kubernetes.io/name: kuberay-operator
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: ray-operator
+    app.kubernetes.io/managed-by: kubectl
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuberay-operator-role
+  labels:
+    app.kubernetes.io/name: kuberay-operator
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: ray-operator
+rules:
+  # Full control over all Ray CRDs
+  - apiGroups: ["ray.io"]
+    resources: ["*"]
+    verbs: ["*"]
+
+  # Pod lifecycle management including exec for Ray head
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+
+  # Service management for Ray head and worker services
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # ConfigMap and Secret management for Ray cluster configuration
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Event creation for cluster status updates
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+  # Batch job management for RayJob submitter pods
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuberay-operator-binding
+  labels:
+    app.kubernetes.io/name: kuberay-operator
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: ray-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kuberay-operator-role
+subjects:
+  - kind: ServiceAccount
+    name: kuberay-operator-sa
+    namespace: ray-system

@@ -1,0 +1,95 @@
+################################################################################
+# Stage 1: Single GPU RayJob - H1 Humanoid Training Validation
+#
+# Runs a short single-GPU training job to validate the full pipeline:
+#   - Isaac Lab training with H1-v0 task
+#   - ClickHouse metrics logging
+#   - MLflow experiment tracking
+#   - FSx checkpoint storage
+#
+# Usage:
+#   export ECR_REPO_URL=123456789012.dkr.ecr.us-east-1.amazonaws.com
+#   envsubst < stage1-rayjob.yaml | kubectl apply -f -
+################################################################################
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: h1-single-gpu-validation
+  namespace: training
+  labels:
+    app.kubernetes.io/name: h1-single-gpu-validation
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: training
+    isaac-lab/stage: "1"
+    isaac-lab/validation: "true"
+spec:
+  entrypoint: >-
+    python /workspace/scripts/train.py
+    --task H1-v0
+    --num_envs 4096
+    --max_iterations 100
+    --headless
+    --device cuda:0
+
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 300
+
+  rayClusterSpec:
+    rayVersion: "2.42.1"
+
+    headGroupSpec:
+      serviceType: ClusterIP
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-cpus: "4"
+        num-gpus: "1"
+      template:
+        metadata:
+          labels:
+            ray.io/node-type: head
+            isaac-lab/stage: "1"
+        spec:
+          nodeSelector:
+            node-type: gpu
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: ray-head
+              image: ${ECR_REPO_URL}/isaac-lab-training:v1.0.0
+              ports:
+                - containerPort: 6379
+                  name: gcs-server
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+              env:
+                - name: WORKFLOW_ID
+                  value: "h1-single-gpu-validation"
+                - name: CLICKHOUSE_HOST
+                  value: "clickhouse.logging.svc.cluster.local"
+                - name: MLFLOW_TRACKING_URI
+                  value: "http://mlflow.model-registry.svc.cluster.local:5000"
+              resources:
+                requests:
+                  cpu: "4"
+                  memory: "16Gi"
+                  nvidia.com/gpu: "1"
+                limits:
+                  cpu: "8"
+                  memory: "32Gi"
+                  nvidia.com/gpu: "1"
+              volumeMounts:
+                - name: fsx-storage
+                  mountPath: /mnt/fsx
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh", "-c", "ray stop"]
+          volumes:
+            - name: fsx-storage
+              persistentVolumeClaim:
+                claimName: fsx-training
+          restartPolicy: Never

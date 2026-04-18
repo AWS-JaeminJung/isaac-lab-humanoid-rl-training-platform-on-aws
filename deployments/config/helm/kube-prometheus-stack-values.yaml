@@ -21,7 +21,7 @@ prometheus:
     # Retention: 15 days of metrics
     retention: 15d
 
-    # Storage: 100Gi EBS gp3
+    # Storage: 50Gi EBS gp3
     storageSpec:
       volumeClaimTemplate:
         spec:
@@ -29,7 +29,7 @@ prometheus:
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
-              storage: 100Gi
+              storage: 50Gi
 
     # Resource requests/limits
     resources:
@@ -83,6 +83,14 @@ grafana:
     storageClassName: gp3
     size: 10Gi
 
+  # Ingress disabled - handled by separate grafana-ingress.yaml manifest
+  ingress:
+    enabled: false
+
+  # OIDC client secret injected from ExternalSecret as environment variable
+  envFromSecrets:
+    - grafana-oidc-credentials
+
   # Admin credentials (password set via --set or secrets)
   adminUser: admin
   adminPassword: ""  # Set via --set grafana.adminPassword=<value>
@@ -90,16 +98,22 @@ grafana:
   # Grafana.ini configuration
   grafana.ini:
     server:
-      root_url: https://grafana.internal
-    # Keycloak OIDC integration (configured in Phase 8 after Phase 4)
+      root_url: https://grafana.isaac-lab.internal  # Overridden at install time via --set
+    # Keycloak OIDC integration (Phase 04 must be deployed first)
     auth.generic_oauth:
-      enabled: false  # Enable after Keycloak is deployed
+      enabled: true
       name: Keycloak
       allow_sign_up: true
+      auto_login: false
       scopes: openid profile email
-      auth_url: ""    # https://keycloak.internal/realms/isaac-lab-production/protocol/openid-connect/auth
-      token_url: ""   # https://keycloak.internal/realms/isaac-lab-production/protocol/openid-connect/token
-      api_url: ""     # https://keycloak.internal/realms/isaac-lab-production/protocol/openid-connect/userinfo
+      client_id: grafana
+      # client_secret is injected from the grafana-oidc-credentials ExternalSecret
+      client_secret: ${GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET}
+      auth_url: https://keycloak.isaac-lab.internal/realms/isaac-lab-production/protocol/openid-connect/auth
+      token_url: https://keycloak.isaac-lab.internal/realms/isaac-lab-production/protocol/openid-connect/token
+      api_url: https://keycloak.isaac-lab.internal/realms/isaac-lab-production/protocol/openid-connect/userinfo
+      role_attribute_path: "contains(realm_access.roles[*], 'admin') && 'Admin' || contains(realm_access.roles[*], 'editor') && 'Editor' || 'Viewer'"
+      tls_skip_verify_insecure: false
 
   # Data sources
   additionalDataSources:

@@ -1,0 +1,84 @@
+{
+  "realm": "isaac-lab-production",
+  "enabled": true,
+  "displayName": "Isaac Lab Production",
+  "displayNameHtml": "<h1>Isaac Lab</h1>",
+  "sslRequired": "all",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "failureFactor": 5,
+  "accessTokenLifespan": 300,
+  "accessTokenLifespanForImplicitFlow": 300,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 36000,
+  "offlineSessionIdleTimeout": 2592000,
+  "offlineSessionMaxLifespan": 5184000,
+  "accessCodeLifespan": 60,
+  "accessCodeLifespanUserAction": 300,
+  "accessCodeLifespanLogin": 1800,
+  "actionTokenGeneratedByAdminLifespan": 43200,
+  "actionTokenGeneratedByUserLifespan": 300,
+  "oauth2DeviceCodeLifespan": 600,
+  "oauth2DevicePollingInterval": 5,
+  "defaultSignatureAlgorithm": "RS256",
+  "revokeRefreshToken": false,
+  "refreshTokenMaxReuse": 0,
+  "internationalizationEnabled": false,
+  "defaultLocale": "en",
+  "smtpServer": {},
+  "eventsEnabled": true,
+  "eventsExpiration": 604800,
+  "eventsListeners": ["jboss-logging"],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "researcher",
+        "description": "ML researcher with standard GPU allocation",
+        "composite": false,
+        "clientRole": false,
+        "attributes": {
+          "gpu_quota": ["4"]
+        }
+      },
+      {
+        "name": "engineer",
+        "description": "MLOps engineer with elevated GPU allocation",
+        "composite": false,
+        "clientRole": false,
+        "attributes": {
+          "gpu_quota": ["10"]
+        }
+      },
+      {
+        "name": "viewer",
+        "description": "Read-only viewer with no GPU allocation",
+        "composite": false,
+        "clientRole": false,
+        "attributes": {
+          "gpu_quota": ["0"]
+        }
+      }
+    ]
+  },
+  "defaultDefaultClientScopes": [
+    "web-origins",
+    "acr",
+    "profile",
+    "roles",
+    "email"
+  ],
+  "defaultOptionalClientScopes": [
+    "offline_access",
+    "address",
+    "phone",
+    "microprofile-jwt"
+  ]
+}

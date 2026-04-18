@@ -1,0 +1,89 @@
+################################################################################
+# OSMO Controller RBAC
+#
+# ServiceAccount, ClusterRole, and ClusterRoleBinding for the OSMO Controller.
+# Grants permissions to manage RayJobs, monitor RayClusters, and interact
+# with pods, services, configmaps, and events across namespaces.
+################################################################################
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osmo-controller-sa
+  namespace: orchestration
+  labels:
+    app.kubernetes.io/name: osmo-controller
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: orchestration
+    app.kubernetes.io/managed-by: kubectl
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osmo-controller-role
+  labels:
+    app.kubernetes.io/name: osmo-controller
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: orchestration
+rules:
+  # RayJob management - full CRUD
+  - apiGroups: ["ray.io"]
+    resources: ["rayjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # RayCluster monitoring and cleanup
+  - apiGroups: ["ray.io"]
+    resources: ["rayclusters"]
+    verbs: ["get", "list", "watch", "delete"]
+
+  # Pod monitoring
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # Pod logs for job output
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
+  # Service discovery
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+
+  # ConfigMap management for job configuration
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Event creation for audit trail
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+  # Namespace awareness
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+
+  # ResourceQuota monitoring for GPU quota enforcement
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osmo-controller-binding
+  labels:
+    app.kubernetes.io/name: osmo-controller
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: orchestration
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: osmo-controller-role
+subjects:
+  - kind: ServiceAccount
+    name: osmo-controller-sa
+    namespace: orchestration

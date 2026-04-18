@@ -1,0 +1,50 @@
+################################################################################
+# Grafana Ingress - Internal ALB with ACM TLS
+#
+# Routes external traffic to the Grafana service deployed by
+# kube-prometheus-stack. Keycloak OIDC authentication is handled by
+# Grafana itself (configured in grafana.ini).
+#
+# Requires:
+#   - AWS Load Balancer Controller installed (Phase 02)
+#   - ACM certificate for *.isaac-lab.internal (Phase 01)
+#   - Environment variables set before applying via envsubst:
+#       ACM_CERT_ARN, DOMAIN
+#
+# Usage:
+#   export ACM_CERT_ARN="arn:aws:acm:us-east-1:123456789012:certificate/..."
+#   export DOMAIN="isaac-lab.internal"
+#   envsubst < grafana-ingress.yaml | kubectl apply -f -
+################################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: monitoring
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: "${ACM_CERT_ARN}"
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /api/health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+  labels:
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: control-room
+spec:
+  rules:
+    - host: grafana.${DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kube-prometheus-stack-grafana
+                port:
+                  number: 80

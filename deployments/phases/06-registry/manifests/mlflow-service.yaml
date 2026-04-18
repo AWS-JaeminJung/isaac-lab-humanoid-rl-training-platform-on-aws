@@ -1,0 +1,25 @@
+################################################################################
+# MLflow Server Service
+#
+# ClusterIP service exposing the MLflow tracking server on port 5000.
+# Used as the upstream target for OAuth2 Proxy.
+################################################################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow
+  namespace: mlflow
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: registry
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  type: ClusterIP
+  selector:
+    app: mlflow
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+      protocol: TCP

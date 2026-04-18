@@ -155,7 +155,7 @@ scheduling:
 # ---------------------------------------------------------------------------
 cull:
   enabled: true
-  timeout: 3600     # 1 hour idle timeout
+  timeout: 1800     # 30 minutes idle timeout
   every: 300        # Check every 5 minutes
   maxAge: 28800     # 8 hours max age
   concurrency: 10

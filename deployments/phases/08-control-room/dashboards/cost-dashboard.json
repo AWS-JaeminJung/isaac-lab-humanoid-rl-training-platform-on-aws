@@ -1,0 +1,217 @@
+{
+  "uid": "isaac-lab-cost",
+  "title": "Cost & GPU Hours",
+  "description": "Cost tracking and GPU utilization hours: active GPU time, node uptime, and Karpenter scaling events.",
+  "tags": ["isaac-lab", "cost", "gpu-hours"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "refresh": "5m",
+  "templating": {
+    "list": [
+      {
+        "name": "interval",
+        "label": "Aggregation",
+        "type": "interval",
+        "query": "1h,6h,12h,1d",
+        "current": { "text": "1h", "value": "1h" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "GPU Hours (Active GPUs x Time)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(DCGM_FI_DEV_GPU_UTIL{} > bool 0[$interval])) / 3600",
+          "legendFormat": "GPU Hours (active)"
+        },
+        {
+          "expr": "count(DCGM_FI_DEV_GPU_UTIL) * $__range_s / 3600",
+          "legendFormat": "GPU Hours (total available)",
+          "hide": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "showPoints": "never",
+            "stacking": { "mode": "none" }
+          },
+          "color": { "fixedColor": "blue", "mode": "fixed" },
+          "unit": "h"
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Active GPUs Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "count(DCGM_FI_DEV_GPU_UTIL > 0)",
+          "legendFormat": "Active GPUs"
+        },
+        {
+          "expr": "count(DCGM_FI_DEV_GPU_UTIL)",
+          "legendFormat": "Total GPUs"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 15, "showPoints": "never" },
+          "color": { "mode": "palette-classic" },
+          "unit": "none",
+          "min": 0
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Node Uptime",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "count by (label_node_type) (kube_node_info * on(node) group_left(label_node_type) kube_node_labels)",
+          "legendFormat": "{{ label_node_type }} nodes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "stacking": { "mode": "normal" }
+          },
+          "color": { "mode": "palette-classic" },
+          "unit": "none",
+          "min": 0
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Karpenter Node Events",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(karpenter_nodes_created_total[1h]))",
+          "legendFormat": "Nodes Created (per hour)"
+        },
+        {
+          "expr": "sum(increase(karpenter_nodes_terminated_total[1h]))",
+          "legendFormat": "Nodes Terminated (per hour)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "auto",
+            "drawStyle": "bars",
+            "barAlignment": 0
+          },
+          "color": { "mode": "palette-classic" },
+          "unit": "none",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Nodes Created (per hour)" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Nodes Terminated (per hour)" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Cost Summary (Estimated)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 24 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(DCGM_FI_DEV_GPU_UTIL{} > bool 0[$__range])) / 3600",
+          "legendFormat": "Total GPU Hours"
+        },
+        {
+          "expr": "count(kube_node_info) * $__range_s / 3600",
+          "legendFormat": "Total Node Hours"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          },
+          "unit": "h",
+          "decimals": 1
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value_and_name",
+        "colorMode": "background"
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}
