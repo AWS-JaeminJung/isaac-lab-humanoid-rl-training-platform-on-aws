@@ -1673,6 +1673,34 @@ ray.internal  → Internal ALB (Alias)
 
 ---
 
+## Screenshots
+
+### OSMO Workflows
+
+![OSMO Workflows](assets/osmo-workflows.png)
+
+### OSMO Resources
+
+![OSMO Resources](assets/osmo-resources.png)
+
+### OSMO Pools
+
+![OSMO Pools](assets/osmo-pools.png)
+
+### Single GPU Job
+
+![OSMO Single GPU Job](assets/osmo-single-gpu-job.png)
+
+### Multi GPU Job
+
+![OSMO Multi GPU Job](assets/osmo-multi-gpu-job.png)
+
+### Multi Node Job
+
+![OSMO Multi Node Job](assets/osmo-multi-node-job.png)
+
+---
+
 ## References
 
 - [NVIDIA OSMO](https://docs.nvidia.com/osmo/)
