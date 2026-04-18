@@ -353,4 +353,4 @@ grafana.internal → Internal ALB (Alias)
 
 ## Next
 
-→ [Phase 9: Lobby](phase9-lobby.md)
+→ [Phase 9: Lobby](9-phase9-lobby.md)

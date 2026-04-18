@@ -334,4 +334,4 @@ Option B: 기존 엔터프라이즈 CA
 
 ## Next
 
-→ [Phase 2: Platform](phase2-platform.md)
+→ [Phase 2: Platform](2-phase2-platform.md)
