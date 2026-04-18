@@ -138,16 +138,16 @@ Phase 1 ─→ 2 ─→ 3 ─→ 4 ─→ 5 ─→ 6 ─→ 7 ─→ 8 ─→ 9 
 
 | Phase | 이름 | 문서 | 내용 |
 |:-----:|------|------|------|
-| 1 | **Foundation** | [1-phase1-foundation.md](1-phase1-foundation.md) | 네트워크 기반 — VPC, 서브넷, DX, VPC Endpoints, SG, Route53, TLS |
-| 2 | **Platform** | [2-phase2-platform.md](2-phase2-platform.md) | 컴퓨팅/스토리지 기반 — EKS, CSI Drivers, RDS, S3, FSx, ECR, Karpenter, IRSA |
-| 3 | **Bridge** | [3-phase3-bridge.md](3-phase3-bridge.md) | EKS Hybrid Nodes — On-Prem GPU 환경 설정, DX 연결 확인, S3 접근 검증 |
-| 4 | **Gate** | [4-phase4-gate.md](4-phase4-gate.md) | 인증/인가 — Keycloak, AD Federation, OIDC Clients, 역할/권한, GPU 쿼터 |
-| 5 | **Orchestrator** | [5-phase5-orchestrator.md](5-phase5-orchestrator.md) | 워크플로우 엔진 — OSMO Controller, KubeRay Operator, RBAC, CPU 테스트 |
-| 6 | **Registry** | [6-phase6-registry.md](6-phase6-registry.md) | 실험 추적/모델 관리 — MLflow, S3 Artifact Store, 모델 레지스트리 |
-| 7 | **Recorder** | [7-phase7-recorder.md](7-phase7-recorder.md) | 학습 로그 — ClickHouse, Fluent Bit, 테이블 DDL, Lifecycle |
-| 8 | **Control Room** | [8-phase8-control-room.md](8-phase8-control-room.md) | 모니터링/알림 — Prometheus, Grafana, DCGM Exporter, 비용 모니터링 |
-| 9 | **Lobby** | [9-phase9-lobby.md](9-phase9-lobby.md) | 연구자 인터페이스 — JupyterHub, 노트북 이미지, 샘플 노트북 |
-| 10 | **Factory Floor** | [10-phase10-factory-floor.md](10-phase10-factory-floor.md) | GPU 학습 — 학습 이미지, 1GPU → 멀티GPU → 멀티노드 → HPO, E2E 검증 |
+| 1 | **Foundation** | [001-phase1-foundation.md](001-phase1-foundation.md) | 네트워크 기반 — VPC, 서브넷, DX, VPC Endpoints, SG, Route53, TLS |
+| 2 | **Platform** | [002-phase2-platform.md](002-phase2-platform.md) | 컴퓨팅/스토리지 기반 — EKS, CSI Drivers, RDS, S3, FSx, ECR, Karpenter, IRSA |
+| 3 | **Bridge** | [003-phase3-bridge.md](003-phase3-bridge.md) | EKS Hybrid Nodes — On-Prem GPU 환경 설정, DX 연결 확인, S3 접근 검증 |
+| 4 | **Gate** | [004-phase4-gate.md](004-phase4-gate.md) | 인증/인가 — Keycloak, AD Federation, OIDC Clients, 역할/권한, GPU 쿼터 |
+| 5 | **Orchestrator** | [005-phase5-orchestrator.md](005-phase5-orchestrator.md) | 워크플로우 엔진 — OSMO Controller, KubeRay Operator, RBAC, CPU 테스트 |
+| 6 | **Registry** | [006-phase6-registry.md](006-phase6-registry.md) | 실험 추적/모델 관리 — MLflow, S3 Artifact Store, 모델 레지스트리 |
+| 7 | **Recorder** | [007-phase7-recorder.md](007-phase7-recorder.md) | 학습 로그 — ClickHouse, Fluent Bit, 테이블 DDL, Lifecycle |
+| 8 | **Control Room** | [008-phase8-control-room.md](008-phase8-control-room.md) | 모니터링/알림 — Prometheus, Grafana, DCGM Exporter, 비용 모니터링 |
+| 9 | **Lobby** | [009-phase9-lobby.md](009-phase9-lobby.md) | 연구자 인터페이스 — JupyterHub, 노트북 이미지, 샘플 노트북 |
+| 10 | **Factory Floor** | [010-phase10-factory-floor.md](010-phase10-factory-floor.md) | GPU 학습 — 학습 이미지, 1GPU → 멀티GPU → 멀티노드 → HPO, E2E 검증 |
 
 ---
 
@@ -155,4 +155,4 @@ Phase 1 ─→ 2 ─→ 3 ─→ 4 ─→ 5 ─→ 6 ─→ 7 ─→ 8 ─→ 9 
 
 | 문서 | 설명 |
 |------|------|
-| [99-architecture.md](99-architecture.md) | Phase별 아키텍처 다이어그램 (전체 구조, 인증 흐름, 학습 데이터 흐름 등) |
+| [099-architecture.md](099-architecture.md) | Phase별 아키텍처 다이어그램 (전체 구조, 인증 흐름, 학습 데이터 흐름 등) |

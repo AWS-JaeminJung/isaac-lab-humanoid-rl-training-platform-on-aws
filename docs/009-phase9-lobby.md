@@ -375,4 +375,4 @@ jupyter.internal → Internal ALB (Alias)
 
 ## Next
 
-→ [Phase 10: Factory Floor](10-phase10-factory-floor.md)
+→ [Phase 10: Factory Floor](010-phase10-factory-floor.md)

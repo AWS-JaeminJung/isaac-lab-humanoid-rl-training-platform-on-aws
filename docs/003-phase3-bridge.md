@@ -218,4 +218,4 @@ spec:
 
 ## Next
 
-→ [Phase 4: Gate](4-phase4-gate.md)
+→ [Phase 4: Gate](004-phase4-gate.md)

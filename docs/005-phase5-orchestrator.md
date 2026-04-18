@@ -1736,4 +1736,4 @@ ray.internal  → Internal ALB (Alias)
 
 ## Next
 
-→ [Phase 6: Registry](6-phase6-registry.md)
+→ [Phase 6: Registry](006-phase6-registry.md)
