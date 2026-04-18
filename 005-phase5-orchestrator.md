@@ -1701,6 +1701,26 @@ ray.internal  → Internal ALB (Alias)
 
 ---
 
+## Demo Videos
+
+### Single GPU Training
+
+<video src="assets/osmo-single-gpu-mlflow.mp4" controls width="100%"></video>
+
+### Single GPU Spot Monitoring
+
+<video src="assets/osmo-single-gpu-spot-monitoring.mp4" controls width="100%"></video>
+
+### Multi GPU Training
+
+<video src="assets/osmo-other-taps-multi-gpu.mp4" controls width="100%"></video>
+
+### Multi Node Training
+
+<video src="assets/osmo-multi-node.mp4" controls width="100%"></video>
+
+---
+
 ## References
 
 - [NVIDIA OSMO](https://docs.nvidia.com/osmo/)
