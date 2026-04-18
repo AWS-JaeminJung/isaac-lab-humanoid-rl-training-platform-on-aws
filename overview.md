@@ -89,5 +89,5 @@ Phase 1 ─→ 2 ─→ 3 ─→ 4 ─→ 5 ─→ 6 ─→ 7 ─→ 8 ─→ 9 
 
 | 문서 | 설명 |
 |------|------|
-| [architecture.md](../architecture.md) | 전체 아키텍처 상세 (네트워크, 서브넷, 인증, 로깅, 모니터링 등) |
-| [architecture-diagram.md](../architecture-diagram.md) | 아키텍처 다이어그램 (전체 구조, 인증 흐름, 학습 데이터 흐름, SG 등) |
+| [architecture.md](architecture.md) | 전체 아키텍처 상세 (네트워크, 서브넷, 인증, 로깅, 모니터링 등) |
+| [architecture-diagram.md](architecture-diagram.md) | 아키텍처 다이어그램 (전체 구조, 인증 흐름, 학습 데이터 흐름, SG 등) |
