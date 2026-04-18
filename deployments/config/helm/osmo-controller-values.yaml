@@ -1,0 +1,91 @@
+################################################################################
+# OSMO Controller Helm Values
+#
+# The OSMO Controller is the central orchestration service for Isaac Lab.
+# It receives training requests via API, validates JWT tokens (GPU quota),
+# and creates RayJob CRDs for KubeRay to execute.
+################################################################################
+
+# Run on management nodes
+nodeSelector:
+  node-type: management
+
+tolerations: []
+
+replicaCount: 2
+
+# Container image (overridden via --set during deploy)
+image:
+  repository: ""  # Set via --set image.repository=<ECR_URI>/osmo-controller
+  tag: "latest"   # Set via --set image.tag=<version>
+  pullPolicy: IfNotPresent
+
+# Resource requests/limits
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8080
+
+# Application configuration
+config:
+  # Keycloak OIDC configuration for JWT validation
+  oidc:
+    issuerUrl: ""       # Set via --set: https://keycloak.internal/realms/isaac-lab-production
+    clientId: "osmo"
+    audience: "osmo"
+
+  # KubeRay settings
+  ray:
+    namespace: "ray-system"
+    defaultImage: ""    # Set via --set: <ECR_URI>/isaac-lab-training:latest
+    headCpu: "4"
+    headMemory: "8Gi"
+    workerGpus: 8       # L40S GPUs per g6e.48xlarge
+
+  # FSx mount for shared storage
+  storage:
+    mountPath: "/mnt/fsx"
+    pvcName: "fsx-claim"
+
+  # S3 buckets
+  s3:
+    checkpointBucket: ""  # Set via --set
+    artifactBucket: ""    # Set via --set
+
+  # GPU quota enforcement
+  quota:
+    enabled: true
+    claimKey: "gpu_quota"  # JWT claim key for GPU quota
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# Pod disruption budget
+podDisruptionBudget:
+  minAvailable: 1
+
+# ServiceAccount (IRSA annotation set via --set)
+serviceAccount:
+  create: true
+  name: osmo-controller
+  annotations: {}

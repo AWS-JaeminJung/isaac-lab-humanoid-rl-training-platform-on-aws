@@ -1,0 +1,57 @@
+################################################################################
+# Karpenter NodePool: gpu-pool
+#
+# Provisions g6e.48xlarge GPU nodes on demand for training workloads.
+# Nodes are tainted with nvidia.com/gpu=:NoSchedule to prevent non-GPU
+# workloads from being scheduled.
+#
+# Requirements:
+#   - Karpenter v1 API (karpenter.sh/v1)
+#   - EC2NodeClass "gpu-class" must be created first
+################################################################################
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: gpu-pool
+spec:
+  template:
+    metadata:
+      labels:
+        node-type: gpu
+        karpenter.sh/nodepool: gpu-pool
+    spec:
+      taints:
+        - key: nvidia.com/gpu
+          effect: NoSchedule
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+            - g6e.48xlarge
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            - on-demand
+            - spot
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values:
+            - us-east-1a
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: gpu-class
+
+  # Resource limits for the entire NodePool
+  limits:
+    # g6e.48xlarge = 192 vCPU, 8 GPU per node
+    # 10 nodes max => 1920 vCPU, 80 GPU
+    cpu: "1920"
+    nvidia.com/gpu: "80"
+
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 5m
+
+  # Weight determines priority (higher = preferred)
+  weight: 10

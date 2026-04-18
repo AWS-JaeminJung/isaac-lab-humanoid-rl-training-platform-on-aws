@@ -1,0 +1,189 @@
+################################################################################
+# kube-prometheus-stack Helm Values
+#
+# Chart: prometheus-community/kube-prometheus-stack
+# Repo:  https://prometheus-community.github.io/helm-charts
+#
+# Deploys Prometheus, Grafana, Alertmanager, node-exporter,
+# kube-state-metrics, and DCGM Exporter integration.
+################################################################################
+
+# ---------------------------------------------------------------------------
+# Prometheus
+# ---------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    # Run on management nodes
+    nodeSelector:
+      node-type: management
+    tolerations: []
+
+    # Retention: 15 days of metrics
+    retention: 15d
+
+    # Storage: 100Gi EBS gp3
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 100Gi
+
+    # Resource requests/limits
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+
+    # Scrape interval
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+
+    # Additional scrape configs for DCGM Exporter
+    additionalScrapeConfigs:
+      - job_name: dcgm-exporter
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            regex: dcgm-exporter
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: (.+)
+            replacement: ${1}:9400
+
+# ---------------------------------------------------------------------------
+# Grafana
+# ---------------------------------------------------------------------------
+grafana:
+  # Run on management nodes
+  nodeSelector:
+    node-type: management
+  tolerations: []
+
+  # Resource requests/limits
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Persistence
+  persistence:
+    enabled: true
+    storageClassName: gp3
+    size: 10Gi
+
+  # Admin credentials (password set via --set or secrets)
+  adminUser: admin
+  adminPassword: ""  # Set via --set grafana.adminPassword=<value>
+
+  # Grafana.ini configuration
+  grafana.ini:
+    server:
+      root_url: https://grafana.internal
+    # Keycloak OIDC integration (configured in Phase 8 after Phase 4)
+    auth.generic_oauth:
+      enabled: false  # Enable after Keycloak is deployed
+      name: Keycloak
+      allow_sign_up: true
+      scopes: openid profile email
+      auth_url: ""    # https://keycloak.internal/realms/isaac-lab-production/protocol/openid-connect/auth
+      token_url: ""   # https://keycloak.internal/realms/isaac-lab-production/protocol/openid-connect/token
+      api_url: ""     # https://keycloak.internal/realms/isaac-lab-production/protocol/openid-connect/userinfo
+
+  # Data sources
+  additionalDataSources:
+    - name: ClickHouse
+      type: grafana-clickhouse-datasource
+      access: proxy
+      url: http://clickhouse.logging.svc.cluster.local:8123
+      jsonData:
+        defaultDatabase: isaac_lab
+      isDefault: false
+
+  # Dashboard providers
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: isaac-lab
+          orgId: 1
+          folder: Isaac Lab
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/isaac-lab
+
+# ---------------------------------------------------------------------------
+# Alertmanager
+# ---------------------------------------------------------------------------
+alertmanager:
+  alertmanagerSpec:
+    nodeSelector:
+      node-type: management
+    tolerations: []
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  # Alert routing (Slack integration configured post-deploy)
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by: ['alertname', 'namespace']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: default
+      routes:
+        - receiver: critical
+          match:
+            severity: critical
+        - receiver: warning
+          match:
+            severity: warning
+    receivers:
+      - name: default
+      - name: critical
+      - name: warning
+
+# ---------------------------------------------------------------------------
+# Node Exporter (DaemonSet on all nodes)
+# ---------------------------------------------------------------------------
+nodeExporter:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# kube-state-metrics
+# ---------------------------------------------------------------------------
+kubeStateMetrics:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# Disabled sub-charts (not needed)
+# ---------------------------------------------------------------------------
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false

@@ -1,0 +1,161 @@
+################################################################################
+# JupyterHub Helm Values
+#
+# Chart: jupyterhub/jupyterhub
+# Repo:  https://hub.jupyter.org/helm-chart/
+#
+# Provides researcher interface for training submission, real-time monitoring,
+# and result analysis. Authenticates via Keycloak OIDC.
+################################################################################
+
+# ---------------------------------------------------------------------------
+# Hub (JupyterHub server)
+# ---------------------------------------------------------------------------
+hub:
+  # Run on management nodes
+  nodeSelector:
+    node-type: management
+  tolerations: []
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  # Keycloak OIDC Authentication
+  config:
+    GenericOAuthenticator:
+      client_id: jupyterhub
+      client_secret: ""   # Set via --set or external secret
+      oauth_callback_url: https://jupyter.internal/hub/oauth_callback
+      authorize_url: ""   # https://keycloak.internal/realms/isaac-lab-production/protocol/openid-connect/auth
+      token_url: ""       # https://keycloak.internal/realms/isaac-lab-production/protocol/openid-connect/token
+      userdata_url: ""    # https://keycloak.internal/realms/isaac-lab-production/protocol/openid-connect/userinfo
+      scope:
+        - openid
+        - profile
+        - email
+      username_claim: preferred_username
+      login_service: Keycloak
+      allow_all: true
+    JupyterHub:
+      authenticator_class: generic-oauth
+
+  # Database persistence
+  db:
+    type: sqlite-pvc
+    pvc:
+      storageClassName: gp3
+      storage: 5Gi
+
+# ---------------------------------------------------------------------------
+# Proxy
+# ---------------------------------------------------------------------------
+proxy:
+  # Run on management nodes
+  chp:
+    nodeSelector:
+      node-type: management
+    tolerations: []
+    resources:
+      requests:
+        cpu: 200m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
+  # Service type: ClusterIP (accessed via Internal ALB Ingress)
+  service:
+    type: ClusterIP
+
+# ---------------------------------------------------------------------------
+# Single-user notebook servers
+# ---------------------------------------------------------------------------
+singleuser:
+  # Default container image (custom Isaac Lab Jupyter image from ECR)
+  image:
+    name: ""    # Set via --set: <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/jupyter-isaac
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  # CPU-only notebooks (GPU training runs separately via OSMO/RayJob)
+  cpu:
+    limit: 2
+    guarantee: 1
+  memory:
+    limit: 4G
+    guarantee: 2G
+
+  # Run on management nodes (CPU only)
+  nodeSelector:
+    node-type: management
+  tolerations: []
+
+  # Default storage per user
+  storage:
+    type: dynamic
+    capacity: 10Gi
+    dynamic:
+      storageClassName: gp3
+
+  # Extra volume mounts: shared FSx for accessing training outputs
+  extraVolumes:
+    - name: fsx-shared
+      persistentVolumeClaim:
+        claimName: fsx-claim
+  extraVolumeMounts:
+    - name: fsx-shared
+      mountPath: /mnt/fsx
+      readOnly: true
+
+  # Environment variables for notebook sessions
+  extraEnv:
+    MLFLOW_TRACKING_URI: "http://mlflow.mlflow.svc.cluster.local:5000"
+    CLICKHOUSE_HOST: "clickhouse.logging.svc.cluster.local"
+    CLICKHOUSE_PORT: "8123"
+    CLICKHOUSE_DB: "isaac_lab"
+
+  # Lifecycle hooks
+  lifecycleHooks:
+    postStart:
+      exec:
+        command:
+          - /bin/sh
+          - -c
+          - "mkdir -p /home/jovyan/shared && ln -sf /mnt/fsx /home/jovyan/shared/fsx 2>/dev/null || true"
+
+  # Profile list for different notebook environments
+  profileList:
+    - display_name: "Standard Research Notebook"
+      description: "Python 3.11, Isaac Lab SDK, OSMO client, analysis tools"
+      default: true
+    - display_name: "Minimal Notebook"
+      description: "Lightweight Python environment for quick tasks"
+      kubespawner_override:
+        cpu_limit: 1
+        cpu_guarantee: 0.5
+        mem_limit: "2G"
+        mem_guarantee: "1G"
+
+# ---------------------------------------------------------------------------
+# Scheduling
+# ---------------------------------------------------------------------------
+scheduling:
+  userScheduler:
+    enabled: false
+  userPlaceholder:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# Culling idle notebooks
+# ---------------------------------------------------------------------------
+cull:
+  enabled: true
+  timeout: 3600     # 1 hour idle timeout
+  every: 300        # Check every 5 minutes
+  maxAge: 28800     # 8 hours max age
+  concurrency: 10
