@@ -11,6 +11,16 @@
 - Phase 2 완료 (EKS, EBS CSI Driver)
 - EBS gp3 StorageClass 사용 가능
 
+## Design Decisions
+
+| 결정 | 선택 | 이유 |
+|------|------|------|
+| 로그 저장소 | ClickHouse (Loki, Elasticsearch 대신) | 학습 메트릭은 반정형 시계열 데이터이다. SQL로 학습 간 비교/분석이 핵심이며, ClickHouse는 이에 최적화되어 있다 |
+| 메트릭 수집 | 콜백 직접 INSERT (stdout 파싱 대신) | regex 파싱은 rsl_rl 버전 변경 시 silent failure가 발생한다. 콜백은 타입 보장과 내부 메트릭(grad_norm, kl_divergence) 접근이 가능하다 |
+| Raw 로그 | Fluent Bit DaemonSet | 파싱 없이 원본 텍스트를 그대로 저장한다. 구조화는 콜백이 담당하고, Fluent Bit은 디버깅/에러 추적용이다 |
+| 데이터 보존 | TTL 3단계 (90/180일/영구) | raw 로그(90일)는 빠르게 삭제하고, 구조화 메트릭(180일)은 더 오래 보관하며, 학습 요약은 영구 보관한다 |
+| 전송 실패 처리 | try/except pass (학습 중단 안 함) | 메트릭 전송 실패가 학습을 중단시키면 안 된다. 로그 유실보다 학습 연속성이 중요하다 |
+
 ---
 
 ## Service Flow
@@ -18,39 +28,39 @@
 ### 로깅 아키텍처 전체
 
 ```
-┌─ Ray Worker Pod (GPU Node) ─────────────────────────────────────┐
+┌─ Ray Worker Pod (GPU Node) ──────────────────────────────────────┐
 │                                                                  │
 │  rsl_rl 학습 루프                                                │
 │    │                                                             │
 │    ├─ ClickHouseLogger 콜백                                      │
 │    │   매 10 iteration 배치                                      │
-│    │   구조화 메트릭 직접 INSERT                                  │
+│    │   구조화 메트릭 직접 INSERT                                 │
 │    │   (파싱 없음, 타입 보장)                                    │
 │    │         │                                                   │
 │    │         │ HTTP POST :8123                                   │
 │    │         ▼                                                   │
-│    │   ┌──────────────────────────────────────────────────┐     │
-│    │   │          ClickHouse (Management Subnet)          │     │
-│    │   │                                                  │     │
-│    │   │  training_metrics    ◄── 콜백 직접 INSERT         │     │
-│    │   │  (TTL: 180일)           구조화, 분석 가능         │     │
-│    │   │                                                  │     │
-│    │   │  training_raw_logs   ◄── Fluent Bit              │     │
-│    │   │  (TTL: 90일)            파싱 없이 원본 저장       │     │
-│    │   │                                                  │     │
-│    │   │  training_summary    ◄── 학습 완료 시 INSERT      │     │
-│    │   │  (영구 보관)            학습 건당 1행             │     │
-│    │   │                                                  │     │
-│    │   │  Storage: EBS gp3 50Gi                           │     │
-│    │   └──────────────────────────────────────────────────┘     │
+│    │   ┌──────────────────────────────────────────────────┐      │
+│    │   │          ClickHouse (Management Subnet)          │      │
+│    │   │                                                  │      │
+│    │   │  training_metrics    ◄── 콜백 직접 INSERT        │      │
+│    │   │  (TTL: 180일)           구조화, 분석 가능        │      │
+│    │   │                                                  │      │
+│    │   │  training_raw_logs   ◄── Fluent Bit              │      │
+│    │   │  (TTL: 90일)            파싱 없이 원본 저장      │      │
+│    │   │                                                  │      │
+│    │   │  training_summary    ◄── 학습 완료 시 INSERT     │      │
+│    │   │  (영구 보관)            학습 건당 1행            │      │
+│    │   │                                                  │      │
+│    │   │  Storage: EBS gp3 50Gi                           │      │
+│    │   └──────────────────────────────────────────────────┘      │
 │    │                                                             │
 │    └─ stdout/stderr                                              │
 │         │                                                        │
 │         ▼                                                        │
 │    ┌───────────────┐                                             │
-│    │ Fluent Bit    │  DaemonSet (모든 노드)                       │
-│    │ (사이드카 아님)│  /var/log/containers/*training*.log         │
-│    │               │  파싱 없이 raw 텍스트 전송                   │
+│    │ Fluent Bit    │  DaemonSet (모든 노드)                      │
+│    │ (사이드카 아님)│  /var/log/containers/*training*.log        │
+│    │               │  파싱 없이 raw 텍스트 전송                  │
 │    └───────┬───────┘                                             │
 │            │ HTTP POST :8123                                     │
 │            └──────────────▶ training_raw_logs                    │
@@ -82,25 +92,25 @@ TTL              180일                              90일
   ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ Hot (0~90일)                                                    │
-│   training_metrics    iteration 메트릭 (콜백)                    │
+│   training_metrics    iteration 메트릭 (콜백)                   │
 │   training_raw_logs   raw 텍스트 (Fluent Bit)                   │
-│   training_summary    학습 요약 (영구)                           │
+│   training_summary    학습 요약 (영구)                          │
 └────────────────────────────┬────────────────────────────────────┘
                              │ 90일 경과
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ Warm (90~180일)                                                 │
-│   training_metrics    메트릭만 유지                              │
-│   training_raw_logs   TTL 삭제 (자동)                            │
+│   training_metrics    메트릭만 유지                             │
+│   training_raw_logs   TTL 삭제 (자동)                           │
 │   training_summary    영구                                      │
 └────────────────────────────┬────────────────────────────────────┘
                              │ 180일 경과
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ Archive (180일+)                                                │
-│   training_metrics    TTL 삭제 (자동)                            │
+│   training_metrics    TTL 삭제 (자동)                           │
 │   training_summary    영구                                      │
-│   S3 Glacier          raw 전체 백업 (필요시 복구)                │
+│   S3 Glacier          raw 전체 백업 (필요시 복구)               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

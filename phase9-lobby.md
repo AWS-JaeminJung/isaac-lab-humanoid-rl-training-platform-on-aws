@@ -13,6 +13,15 @@
 - Phase 6 완료 (MLflow 운영 중)
 - Phase 7 완료 (ClickHouse 운영 중)
 
+## Design Decisions
+
+| 결정 | 선택 | 이유 |
+|------|------|------|
+| 연구자 인터페이스 | JupyterHub (CLI, 커스텀 UI 대신) | 연구자가 학습 제출/모니터링/분석/시각화를 한 곳에서 수행한다. 노트북 자체가 분석 기록이 된다 |
+| 노트북 GPU | CPU 전용 (GPU 없음) | 노트북은 제출/분석 용도이다. GPU는 학습 Pod에 할당하여 유휴 GPU 낭비를 방지한다 |
+| 세션 관리 | 30분 비활성 cull + 8시간 최대 | Management 노드 리소스를 보존한다. 동시 10명까지 지원하려면 자동 회수가 필수이다 |
+| 사전 설치 패키지 | osmo-client, clickhouse-connect, mlflow, plotly | 연구자가 별도 설치 없이 바로 작업할 수 있다. 일관된 환경을 보장한다 |
+
 ---
 
 ## Service Flow
@@ -24,40 +33,40 @@
   │
   │ https://jupyter.internal
   ▼
-┌─ Internal ALB ──────────────────────────────────────────────────┐
+┌─ Internal ALB ───────────────────────────────────────────────────┐
 │  TLS termination (*.internal 인증서)                             │
-└──────────────────────────┬──────────────────────────────────────┘
+└──────────────────────────┬───────────────────────────────────────┘
                            │
                            ▼
-┌─ JupyterHub (Management Subnet) ────────────────────────────────┐
+┌─ JupyterHub (Management Subnet) ─────────────────────────────────┐
 │                                                                  │
 │  ┌─────────┐  ┌──────────┐  ┌──────────────────────────────┐     │
 │  │  Hub    │  │  Proxy   │  │  User Notebooks (x10)        │     │
-│  │ 0.5C/1Gi│  │ 0.2C/256M│  │  2C/4Gi each, CPU only      │     │
-│  │         │  │          │  │  30min idle cull              │     │
-│  │ Keycloak│  │ Traffic  │  │  8hr max lifetime             │     │
+│  │ 0.5C/1Gi│  │ 0.2C/256M│  │  2C/4Gi each, CPU only       │     │
+│  │         │  │          │  │  30min idle cull             │     │
+│  │ Keycloak│  │ Traffic  │  │  8hr max lifetime            │     │
 │  │ OIDC    │  │ Routing  │  │                              │     │
 │  └─────────┘  └──────────┘  │  Pre-installed:              │     │
-│                              │  ├── osmo-client             │     │
-│                              │  ├── clickhouse-connect      │     │
-│                              │  ├── mlflow                  │     │
-│                              │  ├── plotly, pandas          │     │
-│                              │  └── boto3                   │     │
-│                              └──────────────────────────────┘     │
+│                              │  ├── osmo-client            │     │
+│                              │  ├── clickhouse-connect     │     │
+│                              │  ├── mlflow                 │     │
+│                              │  ├── plotly, pandas         │     │
+│                              │  └── boto3                  │     │
+│                              └──────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 ### 노트북에서의 서비스 연동
 
 ```
-┌─ User Notebook (CPU only, 2C/4Gi) ──────────────────────────────┐
+┌─ User Notebook (CPU only, 2C/4Gi) ────────────────────────────────┐
 │                                                                   │
 │  1. 학습 제출                                                     │
 │     osmo-client ──── HTTPS ────▶ OSMO API (osmo.internal)         │
 │     (Bearer JWT)                  → RayJob 생성                   │
 │                                   → Karpenter → GPU 프로비저닝    │
 │                                                                   │
-│  2. 실시간 모니터링                                                │
+│  2. 실시간 모니터링                                               │
 │     clickhouse-connect ──────▶ ClickHouse (:8123)                 │
 │     SQL query                   training_metrics                  │
 │     → pandas DataFrame                                            │
@@ -65,18 +74,18 @@
 │                                                                   │
 │  3. 실험 관리                                                     │
 │     mlflow ──── HTTPS ────────▶ MLflow (mlflow.internal)          │
-│     search_runs()                실험 목록, 파라미터 비교          │
-│     register_model()             모델 등록/스테이지 변경           │
+│     search_runs()                실험 목록, 파라미터 비교         │
+│     register_model()             모델 등록/스테이지 변경          │
 │                                                                   │
 │  4. 결과 분석                                                     │
 │     clickhouse-connect ──────▶ ClickHouse                         │
-│     SQL JOIN (여러 학습 비교)                                      │
+│     SQL JOIN (여러 학습 비교)                                     │
 │     → pandas + plotly                                             │
-│     → 노트북 자체가 분석 기록                                      │
+│     → 노트북 자체가 분석 기록                                     │
 │                                                                   │
-│  5. 체크포인트 조회                                                │
+│  5. 체크포인트 조회                                               │
 │     boto3 ────────────────────▶ S3 (VPC Endpoint)                 │
-│     체크포인트 목록/다운로드                                        │
+│     체크포인트 목록/다운로드                                      │
 └───────────────────────────────────────────────────────────────────┘
 ```
 

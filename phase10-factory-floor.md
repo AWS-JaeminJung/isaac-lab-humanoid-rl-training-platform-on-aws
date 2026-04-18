@@ -12,6 +12,15 @@ GPU 학습 — 학습 이미지, 1GPU → 멀티GPU → 멀티노드 → HPO, E2
 - ECR에 프로덕션 학습 이미지 push 완료
 - [Karpenter](https://karpenter.sh/docs/) GPU NodePool 설정 완료
 
+## Design Decisions
+
+| 결정 | 선택 | 이유 |
+|------|------|------|
+| 검증 전략 | 4단계 (1→8→16 GPU→HPO) | 단계별로 문제를 격리한다. 1 GPU에서 콜백/메트릭 문제를 먼저 해결하고, 멀티노드에서 네트워크 문제를 확인한다 |
+| HPO 스케줄러 | ASHA (PBT, Hyperband 대신) | 조기 중단으로 유망하지 않은 trial의 GPU 시간을 절약한다. 구현이 단순하고 비동기 실행을 지원한다 |
+| 성능 기준선 | 최초 풀 스케일 결과 기록 | 이후 코드/인프라 변경 시 성능 회귀를 감지하는 기준이 된다 |
+| On-Prem eval | S3에서 체크포인트 다운로드 후 실행 | AWS GPU 비용 없이 On-Prem RTX Pro 6000으로 평가한다. DX 경유 S3 접근으로 간단하다 |
+
 ---
 
 ## Service Flow
@@ -70,7 +79,7 @@ Karpenter ──── EC2 API ──── g6e.48xlarge 프로비저닝
   │
   │ 5. 학습 시작
   ▼
-┌─ GPU Nodes ─────────────────────────────────────────────┐
+┌─ GPU Nodes ──────────────────────────────────────────────┐
 │                                                          │
 │  Isaac Lab + rsl_rl 학습 루프                            │
 │    │                                                     │
@@ -84,7 +93,7 @@ Karpenter ──── EC2 API ──── g6e.48xlarge 프로비저닝
   │
   │ 6. 연구자 모니터링
   ▼
-┌─ 모니터링 ──────────────────────────────────────────────┐
+┌─ 모니터링 ───────────────────────────────────────────────┐
 │  Grafana (grafana.internal)                              │
 │    ├── Training Dashboard: reward, loss, timing          │
 │    └── Infrastructure Dashboard: GPU util, temp          │

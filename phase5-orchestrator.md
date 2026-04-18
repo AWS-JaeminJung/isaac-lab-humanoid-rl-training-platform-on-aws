@@ -12,6 +12,15 @@
 - Phase 4 완료 (Keycloak OIDC 클라이언트: osmo-api, ray-dashboard)
 - ECR에 학습 이미지 push 완료
 
+## Design Decisions
+
+| 결정 | 선택 | 이유 |
+|------|------|------|
+| 워크플로우 엔진 | OSMO + KubeRay (Argo Workflows 대신) | NVIDIA의 GPU 학습 전용 오케스트레이터이다. Isaac Lab 네이티브 연동과 GPU 쿼터 관리를 지원한다 |
+| Ray 클러스터 수명 | RayJob (작업별 생성/삭제) | 작업 완료 시 자동 삭제되어 GPU를 즉시 반환한다. 상시 가동 클러스터는 유휴 GPU 비용이 발생한다 |
+| GPU 스케일 패턴 | 0→N (Karpenter) | 학습 미실행 시 GPU 노드 0대. 비용이 사용량에 정확히 비례한다 |
+| 파이프라인 검증 | CPU 모드 사전 테스트 | GPU 투입 전에 전체 파이프라인(제출→실행→기록→삭제)을 CPU로 검증하여 GPU 비용 낭비를 방지한다 |
+
 ---
 
 ## Service Flow
@@ -27,10 +36,10 @@
 ┌───────────────────────────────────────────────────────────┐
 │ OSMO Controller (Management Subnet)                       │
 │                                                           │
-│  1. JWT 검증 (Keycloak issuer)                           │
-│  2. gpu_quota 확인 (researcher: 4, engineer: 10)         │
+│  1. JWT 검증 (Keycloak issuer)                            │
+│  2. gpu_quota 확인 (researcher: 4, engineer: 10)          │
 │  3. 워크플로우 파라미터 검증                              │
-│  4. RayJob CRD 생성                                      │
+│  4. RayJob CRD 생성                                       │
 └───────────────────┬───────────────────────────────────────┘
                     │
                     │ RayJob CRD
@@ -38,24 +47,24 @@
 ┌───────────────────────────────────────────────────────────┐
 │ KubeRay Operator                                          │
 │                                                           │
-│  1. RayJob 감지                                          │
-│  2. Ray Cluster 생성 (Head + Workers)                    │
-│  3. 학습 entrypoint 실행                                 │
-│  4. 완료 후 Ray Cluster 자동 삭제                        │
+│  1. RayJob 감지                                           │
+│  2. Ray Cluster 생성 (Head + Workers)                     │
+│  3. 학습 entrypoint 실행                                  │
+│  4. 완료 후 Ray Cluster 자동 삭제                         │
 └───────────────────┬───────────────────────────────────────┘
                     │
         ┌───────────┴───────────┐
         ▼                       ▼
-┌──────────────┐      ┌──────────────────────────────────┐
-│ Ray Head     │      │ Ray Workers (GPU Nodes)           │
-│ (Mgmt Node)  │      │                                   │
-│              │      │  Karpenter가 g6e.48xlarge         │
-│ Dashboard    │◄────▶│  프로비저닝                       │
-│ GCS          │ :6379│                                   │
-│ :8265        │      │  Worker 1: 8x L40S                │
-│              │      │  Worker 2: 8x L40S                │
-│              │      │  ...                               │
-└──────────────┘      └──────────────────────────────────┘
+┌──────────────┐      ┌─────────────────────────────────────┐
+│ Ray Head     │      │ Ray Workers (GPU Nodes)             │
+│ (Mgmt Node)  │      │                                     │
+│              │      │  Karpenter가 g6e.48xlarge           │
+│ Dashboard    │◄────▶│  프로비저닝                         │
+│ GCS          │ :6379│                                     │
+│ :8265        │      │  Worker 1: 8x L40S                  │
+│              │      │  Worker 2: 8x L40S                  │
+│              │      │  ...                                │
+└──────────────┘      └─────────────────────────────────────┘
 ```
 
 ### GPU 프로비저닝 흐름
@@ -92,22 +101,22 @@ GPU Node 종료 (비용 절감)
 ### 학습 실행 중 데이터 흐름
 
 ```
-┌─ Ray Worker Pod (GPU Node) ─────────────────────────────────┐
+┌─ Ray Worker Pod (GPU Node) ──────────────────────────────────┐
 │                                                              │
-│  Isaac Lab + rsl_rl 학습 루프                               │
+│  Isaac Lab + rsl_rl 학습 루프                                │
 │    │                                                         │
-│    ├── 체크포인트 저장 ──▶ /mnt/fsx/checkpoints/            │
+│    ├── 체크포인트 저장 ──▶ /mnt/fsx/checkpoints/             │
 │    │                          │                              │
-│    │                     FSx → S3 (비동기 백업)             │
+│    │                     FSx → S3 (비동기 백업)              │
 │    │                                                         │
-│    ├── 콜백 (10 iter 배치) ──▶ ClickHouse (HTTP :8123)     │
+│    ├── 콜백 (10 iter 배치) ──▶ ClickHouse (HTTP :8123)       │
 │    │   training_metrics        (Phase 7)                     │
 │    │                                                         │
-│    ├── 학습 완료 시 ──────▶ MLflow (HTTPS)                  │
+│    ├── 학습 완료 시 ──────▶ MLflow (HTTPS)                   │
 │    │   params, final metrics    (Phase 6)                    │
 │    │   model artifact → S3                                   │
 │    │                                                         │
-│    └── stdout ──▶ Fluent Bit ──▶ ClickHouse                 │
+│    └── stdout ──▶ Fluent Bit ──▶ ClickHouse                  │
 │                   (DaemonSet)   training_raw_logs (Phase 7)  │
 └──────────────────────────────────────────────────────────────┘
 ```

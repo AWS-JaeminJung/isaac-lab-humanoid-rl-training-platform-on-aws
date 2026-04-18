@@ -12,6 +12,17 @@
 - On-Prem 네트워크 팀과 CIDR 대역 협의 완료
 - Direct Connect 물리 회선 프로비저닝 (신규 시 수주 소요)
 
+## Design Decisions
+
+| 결정 | 선택 | 이유 |
+|------|------|------|
+| AZ 전략 | Single AZ | EFA는 동일 AZ에서만 동작하고, FSx for Lustre는 단일 AZ 리소스이며, 크로스 AZ 레이턴시가 NCCL 성능을 저하시킨다 |
+| 외부 통신 | NAT Gateway 없이 DX 경유 | NAT GW 비용($100+/월) 절감. 외부 트래픽(pip install 등)은 DX → On-Prem Proxy로 충분하다 |
+| 서브넷 구성 | Private Subnet Only | GPU 학습은 내부 워크로드이며 퍼블릭 노출이 불필요하다. 모든 AWS 서비스 접근은 VPC Endpoints로 처리한다 |
+| VPC Endpoints | Interface 18개 + Gateway 1개 | NAT Gateway 없이 Private Subnet에서 AWS 서비스에 접근하려면 서비스별 VPC Endpoint가 필수이다 |
+| CIDR | /21 (2,048 IPs) | 현재 사용량 ~335 IPs 대비 6배 여유. 서브넷 4개 할당 후에도 확장 공간이 남는다 |
+| DNS | Route53 PHZ + Resolver Inbound | On-Prem에서 *.internal 도메인을 해석하려면 Resolver Inbound Endpoint가 필요하다. Conditional Forwarder로 연동한다 |
+
 ---
 
 ## Service Flow
@@ -27,26 +38,26 @@ On-Premises (10.200.0.0/21)
         │
         │  Direct Connect
         ▼
-┌─ AWS VPC (10.100.0.0/21, Single AZ) ─────────────────────────────┐
+┌─ AWS VPC (10.100.0.0/21, Single AZ) ───────────────────────────────┐
 │                                                                    │
 │   VGW (Virtual Private Gateway)                                    │
 │     │                                                              │
 │     ▼                                                              │
 │   Private Route Table                                              │
-│     ├── 10.100.0.0/21  → local                                    │
-│     ├── 10.200.0.0/21  → VGW (On-Prem via DX)                     │
-│     ├── 0.0.0.0/0      → VGW (DX → On-Prem → Internet)            │
+│     ├── 10.100.0.0/21  → local                                     │
+│     ├── 10.200.0.0/21  → VGW (On-Prem via DX)                      │
+│     ├── 0.0.0.0/0      → VGW (DX → On-Prem → Internet)             │
 │     └── S3 prefix list  → S3 Gateway Endpoint                      │
 │                                                                    │
-│   ┌──────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
-│   │ GPU Compute      │  │ Management       │  │ Infrastructure │  │
-│   │ 10.100.0.0/24    │  │ 10.100.1.0/24    │  │ 10.100.2.0/24  │  │
-│   │                  │  │                  │  │                │  │
-│   │ g6e.48xlarge x10 │  │ Keycloak, MLflow │  │ Internal ALB   │  │
-│   │ EFA, NCCL        │  │ JupyterHub, Ray  │  │ RDS PostgreSQL │  │
-│   │ FSx mount        │  │ OSMO, Grafana    │  │ FSx for Lustre │  │
-│   │                  │  │ ClickHouse       │  │ VPC Endpoints  │  │
-│   └──────────────────┘  └──────────────────┘  └────────────────┘  │
+│   ┌──────────────────┐  ┌──────────────────┐  ┌────────────────┐   │
+│   │ GPU Compute      │  │ Management       │  │ Infrastructure │   │
+│   │ 10.100.0.0/24    │  │ 10.100.1.0/24    │  │ 10.100.2.0/24  │   │
+│   │                  │  │                  │  │                │   │
+│   │ g6e.48xlarge x10 │  │ Keycloak, MLflow │  │ Internal ALB   │   │
+│   │ EFA, NCCL        │  │ JupyterHub, Ray  │  │ RDS PostgreSQL │   │
+│   │ FSx mount        │  │ OSMO, Grafana    │  │ FSx for Lustre │   │
+│   │                  │  │ ClickHouse       │  │ VPC Endpoints  │   │
+│   └──────────────────┘  └──────────────────┘  └────────────────┘   │
 │                                                                    │
 │   ┌──────────────────┐                                             │
 │   │ Reserved         │  Route53 Private Hosted Zone                │

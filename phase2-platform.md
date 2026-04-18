@@ -12,6 +12,18 @@
 - IAM 관리 권한
 - g6e.48xlarge AZ 가용 확인 완료
 
+## Design Decisions
+
+| 결정 | 선택 | 이유 |
+|------|------|------|
+| EKS 엔드포인트 | Private Only | GPU 클러스터는 외부 노출이 불필요하다. kubectl은 DX 경유로만 접근한다 |
+| GPU 노드 관리 | Karpenter (Cluster Autoscaler 대신) | 0→N 스케일링, 인스턴스 타입 유연성, 빠른 프로비저닝. Cluster Autoscaler는 ASG 기반으로 GPU 스케일 투 제로가 번거롭다 |
+| 노드 분리 | Management MNG + Karpenter GPU | Management는 항상 실행(저비용), GPU는 학습 시에만 스케일업하여 유휴 비용을 제거한다 |
+| 공유 스토리지 | FSx for Lustre (EFS 대신) | 멀티노드 체크포인트 I/O에 병렬 파일시스템 성능이 필요하다. EFS는 처리량이 부족하다 |
+| 메타데이터 DB | RDS PostgreSQL 공용 | Keycloak과 MLflow가 별도 DB를 쓰지만 동일 RDS 인스턴스를 공유하여 관리 복잡도를 줄인다 |
+| 시크릿 관리 | External Secrets + Secrets Manager | K8s Secret을 코드에 하드코딩하지 않고 중앙 관리한다. 시크릿 로테이션도 자동화된다 |
+| Pod 권한 | IRSA (노드 IAM Role 대신) | Pod별 최소 권한 원칙. 노드 IAM Role은 해당 노드의 모든 Pod에 동일 권한을 부여해 과도하다 |
+
 ---
 
 ## Service Flow
@@ -29,8 +41,8 @@ kubectl (On-Prem via DX)
         │
         │ kubelet
         ▼
-┌─ Management Node Group (m6i.2xlarge x3~5) ─────────────────────┐
-│  Subnet: 10.100.1.0/24                                         │
+┌─ Management Node Group (m6i.2xlarge x3~5) ──────────────────────┐
+│  Subnet: 10.100.1.0/24                                          │
 │                                                                 │
 │  System Pods:                                                   │
 │    ├── CoreDNS (x2)                                             │
@@ -48,19 +60,19 @@ kubectl (On-Prem via DX)
 │    └── Fluent Bit (DaemonSet)                                   │
 └─────────────────────────────────────────────────────────────────┘
 
-┌─ GPU Nodes (Karpenter, g6e.48xlarge x0~10) ────────────────────┐
-│  Subnet: 10.100.0.0/24                                         │
+┌─ GPU Nodes (Karpenter, g6e.48xlarge x0~10) ─────────────────────┐
+│  Subnet: 10.100.0.0/24                                          │
 │                                                                 │
-│  ┌──────────────────────────────────────────────────────┐      │
+│  ┌───────────────────────────────────────────────────────┐      │
 │  │ Karpenter NodePool: gpu-pool                          │      │
 │  │   Instance: g6e.48xlarge (8x L40S)                    │      │
 │  │   Taint: nvidia.com/gpu=:NoSchedule                   │      │
 │  │   EFA: enabled                                        │      │
-│  │   Scale: 0 → 10 (학습 요청 시 자동 프로비저닝)         │      │
-│  └──────────────────────────────────────────────────────┘      │
+│  │   Scale: 0 → 10 (학습 요청 시 자동 프로비저닝)        │      │
+│  └───────────────────────────────────────────────────────┘      │
 │                                                                 │
 │  Per Node:                                                      │
-│    ├── Ray Worker Pod (GPU 8개 사용)                             │
+│    ├── Ray Worker Pod (GPU 8개 사용)                            │
 │    ├── DCGM Exporter (DaemonSet)                                │
 │    ├── Fluent Bit (DaemonSet)                                   │
 │    └── FSx mount (/mnt/fsx)                                     │
@@ -82,9 +94,9 @@ kubectl (On-Prem via DX)
    │ PERSISTENT_2│  │ (CSI)     │    │                  │
    │             │  │           │    │ ├── checkpoints  │
    │ /mnt/fsx/   │  │ Used by:  │    │ ├── models       │
-   │ ├─ ckpt/   │  │ ClickHouse│    │ ├── logs-archive │
-   │ ├─ data/   │  │ Prometheus│    │ └── training-data│
-   │ └─ shared/ │  │           │    │                  │
+   │ ├─ ckpt/    │  │ ClickHouse│    │ ├── logs-archive │
+   │ ├─ data/    │  │ Prometheus│    │ └── training-data│
+   │ └─ shared/  │  │           │    │                  │
    └──────┬──────┘  └───────────┘    └──────────────────┘
           │                                   ▲
           │ Data Repository Association       │
@@ -94,8 +106,8 @@ kubectl (On-Prem via DX)
    ┌─────────────────────────────────┐
    │ RDS PostgreSQL                  │
    │   ├── keycloak_db (Phase 4)     │
-   │   └── mlflow_db   (Phase 6)    │
-   │   SG-Storage: :5432            │
+   │   └── mlflow_db   (Phase 6)     │
+   │   SG-Storage: :5432             │
    └─────────────────────────────────┘
 ```
 
@@ -114,13 +126,13 @@ ExtSecrets-Role         ◄────  external-secrets              Secrets M
 CH-Backup-Role          ◄────  clickhouse-backup             S3 logs-archive
 Training-Role           ◄────  training-job                  S3 + FSx
 
-         ┌──────────────────────────────────┐
-         │  EKS OIDC Provider               │
-         │  sts.amazonaws.com               │
-         │                                  │
+         ┌───────────────────────────────────┐
+         │  EKS OIDC Provider                │
+         │  sts.amazonaws.com                │
+         │                                   │
          │  Trust: "aud": "sts.amazonaws.com"│
          │         "sub": "system:sa:ns:name"│
-         └──────────────────────────────────┘
+         └───────────────────────────────────┘
 ```
 
 ---

@@ -12,6 +12,15 @@
 - Phase 4 완료 (Keycloak OIDC 클라이언트: grafana)
 - Phase 7 완료 (ClickHouse 운영 중)
 
+## Design Decisions
+
+| 결정 | 선택 | 이유 |
+|------|------|------|
+| 모니터링 스택 | kube-prometheus-stack | Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics를 하나의 Helm Chart로 통합 배포한다 |
+| GPU 모니터링 | DCGM Exporter | NVIDIA 공식 GPU 모니터링 도구이다. nvidia-smi보다 상세한 메트릭(온도, 전력, 메모리, ECC 에러)을 제공한다 |
+| Grafana 데이터소스 | Prometheus + ClickHouse 이중 | 인프라 실시간 메트릭은 Prometheus, 학습 분석 메트릭은 ClickHouse. 데이터를 중복 저장하지 않는다 |
+| 알림 라우팅 | severity 3단계 | critical은 Slack + PagerDuty 즉시 대응, warning은 Slack 알림, info는 Grafana annotation만 기록한다 |
+
 ---
 
 ## Service Flow
@@ -19,7 +28,7 @@
 ### 모니터링 데이터 흐름
 
 ```
-┌─ GPU Node ──────────────────────┐   ┌─ Management Node ──────────────┐
+┌─ GPU Node ───────────────────────┐   ┌─ Management Node ──────────────┐
 │                                  │   │                                │
 │  ┌──────────────┐                │   │  ┌──────────────────────────┐  │
 │  │ DCGM Exporter│                │   │  │ kube-state-metrics       │  │
@@ -30,7 +39,7 @@
 │  │ GPU memory   │                │   │               │                │
 │  │ Power usage  │                │   │               │                │
 │  └──────┬───────┘                │   │               │                │
-│         │ :9400                   │   │               │                │
+│         │ :9400                  │   │               │                │
 └─────────┼────────────────────────┘   └───────────────┼────────────────┘
           │                                            │
           └──────────────┬─────────────────────────────┘
@@ -49,23 +58,23 @@
                           │
                           │ Prometheus 데이터소스
                           ▼
-              ┌───────────────────────────────────────────┐
+              ┌────────────────────────────────────────────┐
               │ Grafana (Management Subnet)                │
-              │                                           │
-              │  데이터소스:                                │
-              │    ├── Prometheus  (인프라, GPU 메트릭)     │
-              │    └── ClickHouse  (학습 메트릭, raw 로그)  │
-              │                                           │
-              │  대시보드:                                  │
+              │                                            │
+              │  데이터소스:                               │
+              │    ├── Prometheus  (인프라, GPU 메트릭)    │
+              │    └── ClickHouse  (학습 메트릭, raw 로그) │
+              │                                            │
+              │  대시보드:                                 │
               │    ├── Training     (reward, loss, timing) │
               │    ├── HPO          (trial 비교, HP 분석)  │
-              │    ├── Infrastructure (노드, Pod, 디스크)   │
+              │    ├── Infrastructure (노드, Pod, 디스크)  │
               │    └── Cost         (GPU 시간, 노드 가동)  │
-              │                                           │
+              │                                            │
               │  Auth: Keycloak OIDC                       │
               │    engineer → Editor                       │
-              │    researcher, viewer → Viewer              │
-              └───────────────────────────────────────────┘
+              │    researcher, viewer → Viewer             │
+              └────────────────────────────────────────────┘
                           │
                           │ HTTPS (Internal ALB)
                           ▼

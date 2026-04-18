@@ -13,6 +13,15 @@
 - On-Prem AD 서버 정보 (LDAP URL, Bind DN, Base DN)
 - TLS 인증서 준비 (Phase 1-10)
 
+## Design Decisions
+
+| 결정 | 선택 | 이유 |
+|------|------|------|
+| 인증 서버 | Keycloak (Cognito 대신) | AD LDAP Federation이 필요하고, 멀티 프로토콜(OIDC/SAML) 지원과 세밀한 커스터마이징이 가능하다 |
+| ID 소스 | AD LDAP Federation | 기존 사내 계정을 그대로 사용한다. 별도 가입 절차 없이 AD 그룹으로 역할을 자동 매핑한다 |
+| GPU 쿼터 | JWT claim에 gpu_quota 포함 | OSMO가 인증 서버에 콜백 없이 토큰만으로 쿼터를 검증할 수 있다. 분산 환경에서 효율적이다 |
+| 서비스 인증 | 서비스별 OIDC 클라이언트 | 서비스마다 독립적인 클라이언트 시크릿과 리다이렉트 URI를 관리하여 보안을 격리한다 |
+
 ---
 
 ## Service Flow
@@ -31,15 +40,15 @@ On-Prem AD Server (LDAP)
 │                                                          │
 │  Realm: isaac-lab-production                             │
 │                                                          │
-│  ┌──────────────────┐    ┌───────────────────────────┐   │
-│  │ LDAP Federation  │    │ OIDC Client Registry      │   │
-│  │                  │    │                           │   │
-│  │ Full Sync: 24h   │    │ ├── jupyterhub  (AuthCode)│   │
-│  │ Changed: 15min   │    │ ├── grafana     (AuthCode)│   │
-│  │                  │    │ ├── mlflow      (AuthCode)│   │
-│  │ Group Mapper:    │    │ ├── ray-dashboard(AuthCode)│   │
-│  │ AD Group → Role  │    │ └── osmo-api   (Bearer)   │   │
-│  └──────────────────┘    └───────────────────────────┘   │
+│  ┌──────────────────┐    ┌────────────────────────────┐  │
+│  │ LDAP Federation  │    │ OIDC Client Registry       │  │
+│  │                  │    │                            │  │
+│  │ Full Sync: 24h   │    │ ├── jupyterhub  (AuthCode) │  │
+│  │ Changed: 15min   │    │ ├── grafana     (AuthCode) │  │
+│  │                  │    │ ├── mlflow      (AuthCode) │  │
+│  │ Group Mapper:    │    │ ├── ray-dashboard(AuthCode)│  │
+│  │ AD Group → Role  │    │ └── osmo-api   (Bearer)    │  │
+│  └──────────────────┘    └────────────────────────────┘  │
 │                                                          │
 │  Backend: RDS PostgreSQL (keycloak_db)                   │
 └──────────┬───────────────────────────────────────────────┘
@@ -47,15 +56,15 @@ On-Prem AD Server (LDAP)
            │ OIDC Tokens (JWT)
            ▼
    ┌──────────────────────────────────────────────────┐
-   │              서비스별 인증 흐름                     │
+   │         서비스별 인증 흐름                       │
    │                                                  │
-   │  Browser 접근 (Authorization Code Flow):          │
-   │    User → Service → Keycloak Login → Token        │
-   │    → Service (JWT 검증) → 접근 허용               │
+   │  Browser 접근 (Authorization Code Flow):         │
+   │    User → Service → Keycloak Login → Token       │
+   │    → Service (JWT 검증) → 접근 허용              │
    │                                                  │
-   │  API 접근 (Bearer Token):                         │
-   │    Client → Token 요청 → Keycloak → JWT           │
-   │    → OSMO API (JWT 검증 + gpu_quota) → 실행       │
+   │  API 접근 (Bearer Token):                        │
+   │    Client → Token 요청 → Keycloak → JWT          │
+   │    → OSMO API (JWT 검증 + gpu_quota) → 실행      │
    └──────────────────────────────────────────────────┘
 ```
 
@@ -91,16 +100,16 @@ On-Prem AD Server (LDAP)
 ```
                   ┌───────────┬───────────┬───────────┐
                   │researcher │ engineer  │  viewer   │
-                  │(ML연구자)  │(MLOps)    │(매니저)    │
+                  │(ML연구자) │(MLOps)    │(매니저)   │
 ┌─────────────────┼───────────┼───────────┼───────────┤
 │ JupyterHub      │  Login    │  Login    │     -     │
-│ OSMO 학습 제출   │ 4 GPU    │ 10 GPU   │     -     │
+│ OSMO 학습 제출  │  4 GPU    │ 10 GPU    │     -     │
 │ Grafana 보기    │    ✓      │    ✓      │    ✓      │
 │ Grafana 편집    │    -      │    ✓      │     -     │
 │ MLflow 조회     │    ✓      │    ✓      │    ✓      │
-│ MLflow 모델관리  │    ✓      │    ✓      │     -     │
+│ MLflow 모델관리 │    ✓      │    ✓      │     -     │
 │ Ray Dashboard   │    ✓      │    ✓      │     -     │
-│ ClickHouse 쿼리  │    ✓      │    ✓      │    ✓      │
+│ ClickHouse 쿼리 │    ✓      │    ✓      │    ✓      │
 └─────────────────┴───────────┴───────────┴───────────┘
 ```
 
