@@ -26,6 +26,7 @@ LIB_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)/lib"
 source "${LIB_DIR}/common.sh"
 source "${LIB_DIR}/prereqs.sh"
 source "${LIB_DIR}/terraform.sh"
+source "${LIB_DIR}/preflight.sh"
 
 # ------------------------------------------------------------------------------
 # Parse arguments
@@ -70,13 +71,9 @@ done
 
 phase_start "01 - Foundation"
 
-# Step 0: Prerequisites and AWS authentication
-step_start "Check prerequisites"
-check_prereqs
-step_end $?
-
-step_start "Verify AWS authentication"
-check_aws_auth
+# Step 0: Pre-flight checks
+step_start "Pre-flight checks"
+preflight_phase01
 step_end $?
 
 # Handle destroy mode

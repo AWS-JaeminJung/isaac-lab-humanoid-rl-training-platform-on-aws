@@ -33,6 +33,8 @@ MANIFESTS_DIR="${SCRIPT_DIR}/manifests"
 
 # shellcheck source=../../lib/common.sh
 source "${SCRIPT_DIR}/../../lib/common.sh"
+# shellcheck source=../../lib/preflight.sh
+source "${SCRIPT_DIR}/../../lib/preflight.sh"
 
 # ---------------------------------------------------------------------------
 # Parse flags
@@ -336,12 +338,10 @@ main() {
         return 0
     fi
 
-    # Step 0: Prerequisites
-    check_prereqs
-    check_aws_auth
-
-    # Step 1: Verify Phase 01
-    retrieve_phase01_outputs
+    # Step 0: Pre-flight checks (prereqs + AWS auth + Phase 01 state + secrets)
+    step_start "Pre-flight checks"
+    preflight_phase02
+    step_end $?
 
     # Step 2: Terraform
     if [[ "${SKIP_TERRAFORM}" != "true" ]]; then

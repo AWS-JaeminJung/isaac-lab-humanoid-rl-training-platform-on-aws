@@ -26,6 +26,7 @@ source "${LIB_DIR}/prereqs.sh"
 source "${LIB_DIR}/terraform.sh"
 source "${LIB_DIR}/helm.sh"
 source "${LIB_DIR}/kubectl.sh"
+source "${LIB_DIR}/preflight.sh"
 
 # ------------------------------------------------------------------------------
 # Parse arguments
@@ -54,12 +55,8 @@ done
 
 phase_start "07 - Recorder (ClickHouse + Fluent Bit)"
 
-step_start "Check prerequisites"
-check_prereqs
-step_end $?
-
-step_start "Verify AWS authentication"
-check_aws_auth
+step_start "Pre-flight checks"
+preflight_phase07
 step_end $?
 
 if [[ "${DESTROY}" == "true" ]]; then
