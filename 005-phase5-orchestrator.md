@@ -1693,13 +1693,9 @@ ray.internal  → Internal ALB (Alias)
 
 ![Single GPU Training](assets/osmo-single-gpu-mlflow.webp)
 
-[Full video (mp4)](https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/refs/heads/main/assets/osmo-single-gpu-mlflow.mp4)
-
 ### Single GPU Spot Monitoring
 
 ![Single GPU Spot Monitoring](assets/osmo-single-gpu-spot-monitoring.webp)
-
-[Full video (mp4)](https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/refs/heads/main/assets/osmo-single-gpu-spot-monitoring.mp4)
 
 ### Multi GPU Job
 
@@ -1707,15 +1703,11 @@ ray.internal  → Internal ALB (Alias)
 
 ![Multi GPU Training](assets/osmo-other-taps-multi-gpu.webp)
 
-[Full video (mp4)](https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/refs/heads/main/assets/osmo-other-taps-multi-gpu.mp4)
-
 ### Multi Node Job
 
 ![OSMO Multi Node Job](assets/osmo-multi-node-job.png)
 
 ![Multi Node Training](assets/osmo-multi-node.webp)
-
-[Full video (mp4)](https://github.com/AWS-JaeminJung/isaac-lab-humanoid-rl-training-platform-on-aws/raw/refs/heads/main/assets/osmo-multi-node.mp4)
 
 ---
 
