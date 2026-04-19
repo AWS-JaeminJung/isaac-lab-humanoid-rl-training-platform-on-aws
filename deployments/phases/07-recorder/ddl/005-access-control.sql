@@ -8,6 +8,7 @@ GRANT INSERT ON training_metrics TO role_writer;
 GRANT INSERT ON training_raw_logs TO role_writer;
 GRANT INSERT ON training_summary TO role_writer;
 GRANT INSERT ON platform_logs TO role_writer;
+GRANT INSERT ON node_logs TO role_writer;
 GRANT role_writer TO writer;
 
 -- Researcher (own workflow data only, no platform_logs)
@@ -25,6 +26,7 @@ GRANT SELECT ON training_metrics TO role_engineer;
 GRANT SELECT ON training_raw_logs TO role_engineer;
 GRANT SELECT ON training_summary TO role_engineer;
 GRANT SELECT ON platform_logs TO role_engineer;
+GRANT SELECT ON node_logs TO role_engineer;
 GRANT role_engineer TO engineer;
 
 -- Admin (full access)

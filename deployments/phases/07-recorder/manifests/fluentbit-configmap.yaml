@@ -97,6 +97,34 @@ data:
         Header            Content-Type application/json
         Retry_Limit       5
 
+    # --- Node System Logs (GPU nodes: Xid, EFA, OOM, kubelet) ---
+
+    [INPUT]
+        Name              systemd
+        Tag               node.*
+        Path              /run/log/journal
+        Read_From_Tail    On
+        Systemd_Filter    _SYSTEMD_UNIT=kubelet.service
+        Systemd_Filter    _SYSTEMD_UNIT=containerd.service
+        Systemd_Filter    SYSLOG_IDENTIFIER=kernel
+
+    [FILTER]
+        Name              grep
+        Match             node.*
+        Regex             MESSAGE (Xid|xid|EFA|efa|nccl|NCCL|oom|OOM|Out of memory|killed process|error|Error|fatal|Fatal|GPU fell off|fallen off)
+
+    [OUTPUT]
+        Name              http
+        Match             node.*
+        Host              clickhouse.logging.svc.cluster.local
+        Port              8123
+        URI               /?query=INSERT+INTO+node_logs+FORMAT+JSONEachRow
+        Format            json_lines
+        Json_Date_Key     timestamp
+        Json_Date_Format  iso8601
+        Header            Content-Type application/json
+        Retry_Limit       5
+
   parsers.conf: |
     [PARSER]
         Name        docker

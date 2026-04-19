@@ -152,6 +152,20 @@ Security Groups: SG-Mgmt-Node (cluster SG)
 
 Private Endpoint Only이므로 kubectl 접근은 VPC 내부 또는 DX 경유만 가능하다.
 
+[EKS Control Plane Logging](https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html)을 활성화하여 API server, scheduler, controller manager, authenticator, audit 로그를 CloudWatch Logs로 전송한다. Phase 7에서 ClickHouse에 수집하는 노드/컨테이너 로그와 별개로, 컨트롤 플레인 수준의 스케줄링/인증 문제를 추적하는 데 사용한다.
+
+```
+Logging:
+  api: Enabled
+  audit: Enabled
+  authenticator: Enabled
+  controllerManager: Enabled
+  scheduler: Enabled
+
+Log Group: /aws/eks/isaac-lab-production/cluster
+Retention: 30 days
+```
+
 ### 2-2. [VPC CNI](https://docs.aws.amazon.com/eks/latest/userguide/managing-vpc-cni.html) 설정
 
 ```

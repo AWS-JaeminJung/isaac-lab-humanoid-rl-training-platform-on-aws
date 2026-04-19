@@ -84,6 +84,14 @@ resource "aws_eks_cluster" "this" {
     resources = ["secrets"]
   }
 
+  enabled_cluster_log_types = [
+    "api",
+    "audit",
+    "authenticator",
+    "controllerManager",
+    "scheduler",
+  ]
+
   # Ensure IAM role is created before the cluster
   depends_on = [
     aws_iam_role_policy_attachment.eks_cluster_policy,
@@ -92,6 +100,19 @@ resource "aws_eks_cluster" "this" {
 
   tags = {
     Name = var.cluster_name
+  }
+}
+
+# ---------------------------------------------------------------------------
+# EKS Control Plane Log Group (30 day retention)
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudwatch_log_group" "eks_cluster" {
+  name              = "/aws/eks/${var.cluster_name}/cluster"
+  retention_in_days = 30
+
+  tags = {
+    Name = "${var.cluster_name}-control-plane-logs"
   }
 }
 

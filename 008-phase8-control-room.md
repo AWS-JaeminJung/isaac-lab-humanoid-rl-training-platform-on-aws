@@ -264,6 +264,9 @@ datasources:
 | GPU 온도 | Prometheus | DCGM_FI_DEV_GPU_TEMP |
 | 디스크 사용량 | Prometheus | node_filesystem_avail_bytes |
 | 네트워크 | Prometheus | node_network_transmit_bytes_total |
+| GPU Xid 에러 | ClickHouse-Engineer | SELECT * FROM node_logs WHERE raw_log LIKE '%Xid%' |
+| EFA 에러 | ClickHouse-Engineer | SELECT * FROM node_logs WHERE raw_log LIKE '%EFA%' OR raw_log LIKE '%efa%' |
+| OOM Kill | ClickHouse-Engineer | SELECT * FROM node_logs WHERE raw_log LIKE '%Out of memory%' |
 
 #### Platform Pipeline Dashboard (Engineer/Admin 전용)
 

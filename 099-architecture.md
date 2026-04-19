@@ -230,6 +230,14 @@ Platform Pods (Tier 1: OSMO, KubeRay, Karpenter)
   └── stdout → Fluent Bit (same DaemonSet)
         → platform_logs (TTL 30d)
 
+GPU Node System (journald: kubelet, containerd, kernel)
+  │
+  └── systemd → Fluent Bit (keyword filter: Xid, EFA, OOM)
+        → node_logs (TTL 30d)
+
+EKS Control Plane → CloudWatch Logs (AWS managed)
+  api, scheduler, controller-manager, authenticator, audit
+
 Tier 2 (Keycloak, MLflow, JupyterHub): kubectl logs only
 
 Storage: EBS gp3 (Hot) → S3 Archive (180d+)
@@ -357,8 +365,8 @@ SG-VPC-Endpoint
 ### Logging Lifecycle
 
 ```
-Day 0     training_metrics + training_raw_logs + platform_logs + training_summary (EBS gp3, Hot)
-Day 30    platform_logs TTL expired (auto-deleted)
+Day 0     training_metrics + training_raw_logs + platform_logs + node_logs + training_summary (EBS gp3, Hot)
+Day 30    platform_logs + node_logs TTL expired (auto-deleted)
 Day 90    training_raw_logs TTL expired (auto-deleted)
 Day 180   training_metrics S3 Parquet export then deleted (Archive)
 Day 365   S3 Glacier or delete
