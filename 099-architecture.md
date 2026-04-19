@@ -220,12 +220,19 @@ Training Pod
   │
   ├── ClickHouse Callback (direct INSERT)
   │     → training_metrics (structured metrics)
-  │     → hpo_metrics (HPO trial metrics)
+  │     → training_summary (one row per run, permanent)
   │
   └── stdout → Fluent Bit (DaemonSet)
-        → training_raw_logs (원본 텍스트)
+        → training_raw_logs (raw text, TTL 90d)
 
-Storage: EBS gp3 (Hot) → S3 Archive (180일+)
+Platform Pods (Tier 1: OSMO, KubeRay, Karpenter)
+  │
+  └── stdout → Fluent Bit (same DaemonSet)
+        → platform_logs (TTL 30d)
+
+Tier 2 (Keycloak, MLflow, JupyterHub): kubectl logs only
+
+Storage: EBS gp3 (Hot) → S3 Archive (180d+)
 ```
 
 </details>
@@ -350,11 +357,12 @@ SG-VPC-Endpoint
 ### Logging Lifecycle
 
 ```
-Day 0     training_metrics + training_raw_logs + training_summary (EBS gp3, Hot)
-Day 90    training_raw_logs TTL 만료, 자동 삭제
-Day 180   training_metrics S3 Parquet export 후 삭제 (Archive)
-Day 365   S3 Glacier 보관 또는 삭제
-∞         training_summary 영구 보관 (학습 건당 1행)
+Day 0     training_metrics + training_raw_logs + platform_logs + training_summary (EBS gp3, Hot)
+Day 30    platform_logs TTL expired (auto-deleted)
+Day 90    training_raw_logs TTL expired (auto-deleted)
+Day 180   training_metrics S3 Parquet export then deleted (Archive)
+Day 365   S3 Glacier or delete
+∞         training_summary permanent (one row per training run)
 ```
 
 ### Setup Phases

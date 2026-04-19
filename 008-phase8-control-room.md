@@ -196,39 +196,64 @@ grafana.ini:
 
 ### 8-4. Grafana 데이터소스
 
-| 데이터소스 | 유형 | 용도 |
-|-----------|------|------|
-| Prometheus | Prometheus | 인프라 메트릭, GPU util, 노드 상태 |
-| ClickHouse | [ClickHouse Plugin](https://github.com/grafana/clickhouse-datasource) | 학습 메트릭, raw 로그, 실험 비교 |
+ClickHouse datasource를 역할별로 분리한다. Keycloak 역할 → Grafana Org Role 매핑(8-3)에 따라 대시보드 접근이 제한된다. 상세 설정은 [Phase 7: 접근 제어](007-phase7-recorder.md#7-7-clickhouse-접근-제어)를 참조.
+
+| 데이터소스 | 유형 | ClickHouse 사용자 | 접근 역할 | 용도 |
+|-----------|------|-------------------|-----------|------|
+| Prometheus | Prometheus | - | 전체 | 인프라 메트릭, GPU util, 노드 상태 |
+| ClickHouse-Researcher | [ClickHouse Plugin](https://github.com/grafana/clickhouse-datasource) | researcher | Viewer 이상 | 본인 학습 메트릭, raw 로그 (Row Policy 적용) |
+| ClickHouse-Engineer | [ClickHouse Plugin](https://github.com/grafana/clickhouse-datasource) | engineer | Editor 이상 | 전체 학습 메트릭 + platform_logs |
 
 ```yaml
 datasources:
-  - name: ClickHouse
+  - name: ClickHouse-Researcher
     type: grafana-clickhouse-datasource
     url: http://clickhouse.logging.svc.cluster.local:8123
     jsonData:
       defaultDatabase: default
+      username: researcher
+    secureJsonData:
+      password: ${CLICKHOUSE_RESEARCHER_PASSWORD}
+
+  - name: ClickHouse-Engineer
+    type: grafana-clickhouse-datasource
+    url: http://clickhouse.logging.svc.cluster.local:8123
+    jsonData:
+      defaultDatabase: default
+      username: engineer
+    secureJsonData:
+      password: ${CLICKHOUSE_ENGINEER_PASSWORD}
 ```
 
 ### 8-5. Grafana 대시보드
+
+대시보드별 datasource 매핑과 접근 권한:
+
+| 대시보드 | ClickHouse datasource | 접근 역할 |
+|----------|----------------------|-----------|
+| Training | ClickHouse-Researcher | Viewer 이상 (researcher: 본인 데이터만) |
+| HPO | ClickHouse-Researcher | Viewer 이상 (researcher: 본인 데이터만) |
+| Platform Pipeline | ClickHouse-Engineer | Editor 이상 (engineer/admin만) |
+| Infrastructure | Prometheus | Viewer 이상 |
+| Cost | Prometheus | Viewer 이상 |
 
 #### Training Dashboard
 
 | 패널 | 데이터소스 | 쿼리 |
 |------|-----------|------|
-| Reward 추이 | ClickHouse | SELECT iteration, mean_reward FROM training_metrics WHERE ... |
-| Loss Curves | ClickHouse | value_loss, policy_loss, entropy |
-| Grad Norm | ClickHouse | grad_norm by iteration |
+| Reward 추이 | ClickHouse-Researcher | SELECT iteration, mean_reward FROM training_metrics WHERE ... |
+| Loss Curves | ClickHouse-Researcher | value_loss, policy_loss, entropy |
+| Grad Norm | ClickHouse-Researcher | grad_norm by iteration |
 | GPU Utilization | Prometheus | DCGM_FI_DEV_GPU_UTIL |
-| Iteration Time | ClickHouse | iteration_time, collection_time, learning_time |
+| Iteration Time | ClickHouse-Researcher | iteration_time, collection_time, learning_time |
 
 #### HPO Dashboard
 
 | 패널 | 데이터소스 | 쿼리 |
 |------|-----------|------|
-| Trial 비교 | ClickHouse | sweep_id 기준 trial별 best_reward |
-| HP Correlation | ClickHouse | hp_learning_rate vs best_reward scatter |
-| Trial 진행 상황 | ClickHouse | 진행 중인 trial 수, 완료/중단 비율 |
+| Trial 비교 | ClickHouse-Researcher | sweep_id 기준 trial별 best_reward |
+| HP Correlation | ClickHouse-Researcher | hp_learning_rate vs best_reward scatter |
+| Trial 진행 상황 | ClickHouse-Researcher | 진행 중인 trial 수, 완료/중단 비율 |
 
 #### Infrastructure Dashboard
 
@@ -239,6 +264,15 @@ datasources:
 | GPU 온도 | Prometheus | DCGM_FI_DEV_GPU_TEMP |
 | 디스크 사용량 | Prometheus | node_filesystem_avail_bytes |
 | 네트워크 | Prometheus | node_network_transmit_bytes_total |
+
+#### Platform Pipeline Dashboard (Engineer/Admin 전용)
+
+| 패널 | 데이터소스 | 쿼리 |
+|------|-----------|------|
+| OSMO 에러 | ClickHouse-Engineer | SELECT * FROM platform_logs WHERE namespace='osmo' AND raw_log LIKE '%Error%' |
+| KubeRay 이벤트 | ClickHouse-Engineer | SELECT * FROM platform_logs WHERE namespace='kuberay' |
+| Karpenter 프로비저닝 | ClickHouse-Engineer | SELECT * FROM platform_logs WHERE namespace='karpenter' |
+| 파이프라인 타임라인 | ClickHouse-Engineer | OSMO → KubeRay → Karpenter 순서 시간대별 로그 |
 
 #### Cost Dashboard
 

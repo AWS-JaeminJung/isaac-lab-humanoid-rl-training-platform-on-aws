@@ -198,7 +198,45 @@ hub:
       username_claim: preferred_username
 ```
 
-### 9-4. 노트북 이미지 빌드
+### 9-4. 역할 기반 ClickHouse 자격증명 주입
+
+JupyterHub spawner에서 Keycloak JWT의 role claim을 읽어 ClickHouse 자격증명을 환경변수로 주입한다. 상세 권한 설계는 [Phase 7: 접근 제어](007-phase7-recorder.md#7-7-clickhouse-접근-제어)를 참조.
+
+```yaml
+hub:
+  extraConfig:
+    clickhouse-credentials: |
+      import os
+
+      async def pre_spawn_hook(spawner):
+          auth_state = await spawner.user.get_auth_state()
+          roles = auth_state.get("oauth_user", {}).get("roles", [])
+
+          if "engineer" in roles or "admin" in roles:
+              spawner.environment["CLICKHOUSE_USER"] = "engineer"
+              spawner.environment["CLICKHOUSE_PASSWORD"] = os.environ["CLICKHOUSE_ENGINEER_PASSWORD"]
+          else:
+              spawner.environment["CLICKHOUSE_USER"] = "researcher"
+              spawner.environment["CLICKHOUSE_PASSWORD"] = os.environ["CLICKHOUSE_RESEARCHER_PASSWORD"]
+
+      c.Spawner.pre_spawn_hook = pre_spawn_hook
+```
+
+노트북에서의 사용:
+
+```python
+import clickhouse_connect, os
+client = clickhouse_connect.get_client(
+    host="clickhouse.logging.svc.cluster.local", port=8123,
+    username=os.environ["CLICKHOUSE_USER"],
+    password=os.environ["CLICKHOUSE_PASSWORD"],
+)
+```
+
+- researcher: 본인 workflow만 조회 가능 (Row Policy), platform_logs 접근 불가
+- engineer/admin: 전체 데이터 + platform_logs 조회 가능
+
+### 9-5. 노트북 이미지 빌드
 
 노트북 이미지에는 [clickhouse-connect](https://clickhouse.com/docs/en/integrations/python), [MLflow Python API](https://mlflow.org/docs/latest/python_api/index.html), [plotly](https://plotly.com/python/) 등을 사전 설치한다.
 
@@ -229,7 +267,7 @@ docker build -t {ecr}/jupyterhub-notebook:v1.0.0 .
 docker push {ecr}/jupyterhub-notebook:v1.0.0
 ```
 
-### 9-5. 샘플 노트북
+### 9-6. 샘플 노트북
 
 #### 01-submit-training.ipynb
 
@@ -258,9 +296,12 @@ print(f"Workflow ID: {workflow.id}")
 ```python
 import clickhouse_connect
 import plotly.express as px
+import os
 
 client = clickhouse_connect.get_client(
-    host="clickhouse.logging.svc.cluster.local", port=8123
+    host="clickhouse.logging.svc.cluster.local", port=8123,
+    username=os.environ["CLICKHOUSE_USER"],
+    password=os.environ["CLICKHOUSE_PASSWORD"],
 )
 
 df = client.query_df("""
@@ -315,7 +356,7 @@ mlflow.register_model(
 )
 ```
 
-### 9-6. Ingress 설정
+### 9-7. Ingress 설정
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -343,7 +384,7 @@ spec:
                   number: 80
 ```
 
-### 9-7. Route53 레코드
+### 9-8. Route53 레코드
 
 ```
 jupyter.internal → Internal ALB (Alias)
@@ -367,7 +408,10 @@ jupyter.internal → Internal ALB (Alias)
 - [ ] https://jupyter.internal 접근 → Keycloak 로그인 리다이렉트
 - [ ] 인증 후 JupyterLab 환경 시작
 - [ ] 노트북에서 osmo-client import 성공
-- [ ] 노트북에서 ClickHouse 쿼리 성공
+- [ ] 노트북에서 ClickHouse 쿼리 성공 (CLICKHOUSE_USER/PASSWORD env 확인)
+- [ ] researcher 역할 노트북: 본인 workflow만 조회됨 확인
+- [ ] researcher 역할 노트북: platform_logs 조회 → 권한 에러 확인
+- [ ] engineer 역할 노트북: 전체 데이터 + platform_logs 조회 확인
 - [ ] 노트북에서 MLflow API 호출 성공
 - [ ] 30분 비활성 후 노트북 자동 종료 확인
 - [ ] 동시 사용자 10명 테스트
