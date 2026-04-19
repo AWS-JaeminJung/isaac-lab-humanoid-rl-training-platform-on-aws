@@ -1,7 +1,7 @@
 ################################################################################
 # Stage 3: Multi-Node RayJob - H1 Humanoid Training (2 Nodes, 16 GPUs)
 #
-# Runs a multi-node training job across 2x g6e.48xlarge nodes (16 GPUs total)
+# Runs a multi-node training job across 2x g7e.48xlarge nodes (16 GPUs total)
 # to validate distributed training with EFA/NCCL:
 #   - Head node on management (no GPU for coordination)
 #   - 2 worker replicas, 8 GPUs each

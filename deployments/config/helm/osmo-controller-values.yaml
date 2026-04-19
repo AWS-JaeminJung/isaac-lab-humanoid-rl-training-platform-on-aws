@@ -204,7 +204,7 @@ config:
     defaultImage: ""    # Set via --set: <ECR_URI>/isaac-lab-training:latest
     headCpu: "4"
     headMemory: "8Gi"
-    workerGpus: 8       # L40S GPUs per g6e.48xlarge
+    workerGpus: 8       # L40S GPUs per g7e.48xlarge
 
   # FSx mount for shared storage
   storage:

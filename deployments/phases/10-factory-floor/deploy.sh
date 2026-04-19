@@ -46,9 +46,9 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [--image-only] [--stage N] [--skip-validate]"
             echo ""
             echo "Stages:"
-            echo "  1  Single GPU (1x g6e.xlarge)"
-            echo "  2  Multi-GPU  (1x g6e.48xlarge, 8 GPUs)"
-            echo "  3  Multi-Node (2x g6e.48xlarge, 16 GPUs)"
+            echo "  1  Single GPU (1x On-Prem GPU)"
+            echo "  2  Multi-GPU  (1x g7e.48xlarge, 8 GPUs)"
+            echo "  3  Multi-Node (2x g7e.48xlarge, 16 GPUs)"
             echo "  4  HPO with ASHA scheduler"
             exit 0
             ;;
@@ -81,7 +81,7 @@ fi
 
 # Step 2: Stage 1 - Single GPU
 if [[ -z "${STAGE}" || "${STAGE}" == "1" ]]; then
-    step_start "Stage 1: Single GPU training (1x g6e.xlarge)"
+    step_start "Stage 1: Single GPU training (On-Prem GPU)"
     if [[ -x "${SCRIPT_DIR}/scripts/run-single-gpu.sh" ]]; then
         "${SCRIPT_DIR}/scripts/run-single-gpu.sh"
     fi

@@ -128,7 +128,7 @@ cat > "${BASELINE_FILE}" <<BASELINE_JSON
   "task": "H1-v0",
   "stages": {
     "stage1_single_gpu": {
-      "description": "Single GPU (1x g6e.xlarge)",
+      "description": "Single GPU (1x On-Prem GPU)",
       "gpus": 1,
       "max_iterations": ${S1_ITERATIONS:-0},
       "mean_reward": ${S1_MEAN_REWARD:-0},
@@ -136,7 +136,7 @@ cat > "${BASELINE_FILE}" <<BASELINE_JSON
       "iterations_per_second": ${S1_IPS:-0}
     },
     "stage2_multi_gpu": {
-      "description": "Multi-GPU (1x g6e.48xlarge, 8 GPUs)",
+      "description": "Multi-GPU (1x g7e.48xlarge, 8 GPUs)",
       "gpus": 8,
       "max_iterations": ${S2_ITERATIONS:-0},
       "mean_reward": ${S2_MEAN_REWARD:-0},
@@ -144,7 +144,7 @@ cat > "${BASELINE_FILE}" <<BASELINE_JSON
       "iterations_per_second": ${S2_IPS:-0}
     },
     "stage3_multi_node": {
-      "description": "Multi-Node (2x g6e.48xlarge, 16 GPUs)",
+      "description": "Multi-Node (2x g7e.48xlarge, 16 GPUs)",
       "gpus": 16,
       "max_iterations": ${S3_ITERATIONS:-0},
       "mean_reward": ${S3_MEAN_REWARD:-0},

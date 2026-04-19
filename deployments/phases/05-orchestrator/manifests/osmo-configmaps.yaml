@@ -121,7 +121,7 @@ data:
         # Default head node resources
         head_cpu: "4"
         head_memory: "8Gi"
-        # Default worker GPU configuration (L40S on g6e.48xlarge)
+        # Default worker GPU configuration (L40S on g7e.48xlarge)
         worker_gpus_per_node: 8
         worker_cpu_per_node: "48"
         worker_memory_per_node: "384Gi"

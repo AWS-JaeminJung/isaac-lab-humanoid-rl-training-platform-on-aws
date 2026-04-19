@@ -53,8 +53,7 @@ On-Prem Network (10.200.0.0/21)             AWS VPC (10.100.0.0/21)
 │  Researchers            │                  │  │   └── JupyterHub                           │
 │  (Browser) ─────────────┼── DX + ALB ────►│  │                                            │
 │                         │                  │  └── GPU Nodes (Karpenter, 0→N Spot)          │
-│                         │                  │      ├── p4d.24xlarge (8x A100)               │
-│                         │                  │      └── p5.48xlarge (8x H100)                │
+│                         │                  │      └── g7e.48xlarge (8x L40S)               │
 │                         │                  │                                              │
 │                         │                  │  Storage                                     │
 │                         │                  │  ├── RDS PostgreSQL (Keycloak + MLflow)       │
@@ -488,10 +487,10 @@ make validate-phase10
 
 | Stage | GPUs | Nodes | Duration | What It Validates |
 |-------|------|-------|----------|-------------------|
-| 1. Single GPU | 1 | On-Prem | ~5 min | Basic training loop, ClickHouse logging, MLflow tracking |
-| 2. Multi-GPU | 8 | 1 (Karpenter) | ~15 min | Data-parallel scaling, DCGM metrics, GPU utilization >50% |
-| 3. Multi-Node | 16 | 2 (Karpenter) | ~30 min | NCCL cross-node communication, EFA transport, Karpenter provisioning |
-| 4. HPO | Variable | Variable | ~60 min | Ray Tune ASHA scheduler, 3+ trials, sweep tracking |
+| 1. Single GPU | 1 | On-Prem (`onprem-gpu`) | ~5 min | Basic training loop, ClickHouse logging, MLflow tracking |
+| 2. Multi-GPU | 8 | 1x g7e.48xlarge (Karpenter) | ~15 min | Data-parallel scaling, DCGM metrics, GPU utilization >50% |
+| 3. Multi-Node | 16 | 2x g7e.48xlarge (Karpenter) | ~30 min | NCCL cross-node communication, EFA transport, Karpenter provisioning |
+| 4. HPO | Variable | Karpenter | ~60 min | Ray Tune ASHA scheduler, 3+ trials, sweep tracking |
 
 **Training image** (`docker/Dockerfile`):
 - Base: `nvcr.io/nvidia/isaac-lab:2.2.0`
@@ -659,17 +658,74 @@ All subnets are deployed in a **single Availability Zone** (us-east-1a). This is
 
 The trade-off is no AZ-level redundancy for the control plane. For RL training workloads, throughput matters more than HA.
 
-### GPU Scaling: Karpenter 0→N
+### GPU Node Types and Scheduling
 
-No GPU instances run when idle. Karpenter provisions GPU nodes on demand:
+The cluster has two distinct types of GPU nodes. Which node a training job runs on is determined by `nodeSelector` and `tolerations` in the RayJob manifest.
+
+```
+EKS Cluster
+├── On-Prem Hybrid Nodes (Phase 03)
+│   ├── label:      node-type=onprem-gpu
+│   ├── label:      gpu-model=rtx-pro-6000
+│   ├── taint:      workload-type=onprem-single-gpu:NoSchedule
+│   └── always-on:  registered via SSM, no auto-scaling
+│
+└── Karpenter Cloud GPU Nodes (Phase 02)
+    ├── label:      node-type=gpu
+    ├── taint:      nvidia.com/gpu:NoSchedule
+    ├── instance:   g7e.48xlarge (8x L40S)
+    └── scale 0→N:  provisioned on demand, terminated when idle
+```
+
+**Scheduling rules by stage**:
+
+| Stage | Target Node | nodeSelector | tolerations |
+|-------|------------|-------------|-------------|
+| Single GPU (quick experiments) | On-Prem | `node-type: onprem-gpu` | `workload-type=onprem-single-gpu` |
+| Multi-GPU (8 GPU) | Karpenter | `node-type: gpu` | `nvidia.com/gpu` |
+| Multi-Node (16 GPU) | Karpenter | `node-type: gpu` | `nvidia.com/gpu` |
+| HPO (variable) | Karpenter | `node-type: gpu` | `nvidia.com/gpu` |
+
+**To schedule on On-Prem nodes**, the RayJob must use both the correct nodeSelector and toleration:
+
+```yaml
+# On-Prem GPU scheduling (single-GPU workloads)
+spec:
+  template:
+    spec:
+      nodeSelector:
+        node-type: onprem-gpu                    # NOT "gpu"
+      tolerations:
+        - key: workload-type
+          operator: Equal
+          value: onprem-single-gpu               # matches Phase 03 taint
+          effect: NoSchedule
+```
+
+**To schedule on Karpenter cloud nodes** (multi-GPU workloads):
+
+```yaml
+# Karpenter GPU scheduling (multi-GPU/multi-node workloads)
+spec:
+  template:
+    spec:
+      nodeSelector:
+        node-type: gpu                           # NOT "onprem-gpu"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+```
+
+> **Common mistake**: Using `node-type: gpu` for single-GPU jobs will trigger Karpenter to provision a full g7e.48xlarge (8 GPUs) even though only 1 GPU is needed. For quick experiments and iteration, always target On-Prem nodes with `node-type: onprem-gpu`.
+
+**Karpenter auto-scaling flow** (cloud GPU nodes only):
 
 ```
 Training job submitted → RayJob created → Pods pending (GPU request)
-  → Karpenter detects → Launches p4d/p5 Spot instance → Node joins cluster
-  → Training runs → Job completes → TTL cleanup → Node terminated
+  → Karpenter detects → Launches g7e.48xlarge (Spot/On-Demand) → Node joins cluster
+  → Training runs → Job completes → TTL cleanup → Node terminated (consolidateAfter: 5m)
 ```
-
-On-prem hybrid nodes handle single-GPU workloads (Stage 1, quick experiments) with the taint `workload-type=onprem-single-gpu:NoSchedule`.
 
 ### Authentication Flow
 

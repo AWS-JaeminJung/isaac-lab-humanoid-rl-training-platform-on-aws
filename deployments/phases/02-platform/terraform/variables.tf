@@ -137,7 +137,7 @@ variable "fsx_throughput" {
 variable "gpu_instance_types" {
   description = "List of GPU instance types for Karpenter-managed nodes."
   type        = list(string)
-  default     = ["g6e.48xlarge"]
+  default     = ["g7e.48xlarge"]
 }
 
 variable "gpu_max_nodes" {

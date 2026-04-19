@@ -18,9 +18,9 @@ management_desired_size   = 3
 # ---------------------------------------------------------------------------
 # GPU Nodes (Karpenter-managed)
 # ---------------------------------------------------------------------------
-# g6e.48xlarge: 8x NVIDIA L40S, 192 vCPU, 768 GiB RAM, EFA-enabled
+# g7e.48xlarge: 8x NVIDIA L40S, 192 vCPU, 768 GiB RAM, EFA-enabled
 # Scale 0-10 based on training workload demand
-gpu_instance_type  = "g6e.48xlarge"
+gpu_instance_type  = "g7e.48xlarge"
 gpu_max_nodes      = 10
 gpu_gpus_per_node  = 8
 

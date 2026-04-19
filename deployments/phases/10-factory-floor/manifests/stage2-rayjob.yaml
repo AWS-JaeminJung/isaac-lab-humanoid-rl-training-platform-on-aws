@@ -2,7 +2,7 @@
 # Stage 2: Multi-GPU RayJob - H1 Humanoid Training (8 GPUs, Single Node)
 #
 # Runs a multi-GPU training job using torch.distributed on a single
-# g6e.48xlarge node (8 L40S GPUs) to validate data-parallel scaling:
+# g7e.48xlarge node (8 L40S GPUs) to validate data-parallel scaling:
 #   - PyTorch DDP with 8 GPU processes
 #   - ClickHouse metrics logging
 #   - GPU utilization monitoring via DCGM
