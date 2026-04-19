@@ -30,15 +30,15 @@ On-Prem RTX Pro 6000 머신을 EKS Hybrid Nodes로 등록하여 단일 GPU 작�
 ```
 On-Prem GPU Machine (RTX Pro 6000)
   │
-  │ 1. SSM Agent 설치 + Hybrid Activation
+  │ 1. Install SSM Agent + Hybrid Activation
   ▼
 AWS Systems Manager
   │
-  │ 2. nodeadm으로 EKS 노드 등록
+  │ 2. Register as EKS node via nodeadm
   ▼
 EKS Control Plane
   │
-  │ 3. kubelet 연결, 노드 등록
+  │ 3. kubelet connects, node registered
   ▼
 kubectl get nodes
   NAME              STATUS   ROLES    LABELS
@@ -58,11 +58,11 @@ On-Prem GPU Node
   │
   ├── docker pull ──────── DX ────▶ ECR (VPC Endpoint)
   │
-  ├── checkpoint 다운로드 ── DX ────▶ S3 (Gateway Endpoint)
+  ├── checkpoint download ── DX ────▶ S3 (Gateway Endpoint)
   │
-  ├── 메트릭 전송 ─────── DX ────▶ ClickHouse Pod (Management Subnet)
+  ├── metrics push ──────── DX ────▶ ClickHouse Pod (Management Subnet)
   │
-  └── 실험 기록 ─────── DX ────▶ MLflow Pod (Management Subnet)
+  └── experiment log ────── DX ────▶ MLflow Pod (Management Subnet)
 ```
 
 ### 스케줄링 격리
@@ -82,9 +82,9 @@ On-Prem GPU Node
     │ nvidia.com/  │  │ No Taint     │   │ workload-type= │
     │ gpu=:NoSched │  │              │   │ onprem-single- │
     │              │  │              │   │ gpu:NoSchedule │
-    │ ✓ 분산학습   │  │ ✓ 관리 Pod   │   │                │
-    │ ✓ 멀티 GPU   │  │ ✓ 시스템 Pod │   │ ✓ 단일 GPU 전용│
-    │ ✗ 관리 Pod   │  │ ✗ GPU 작업   │   │ ✗ 분산학습     │
+    │ ✓ Distributed │  │ ✓ Mgmt Pods  │   │                │
+    │ ✓ Multi-GPU   │  │ ✓ System Pods│   │ ✓ Single GPU   │
+    │ ✗ Mgmt Pods   │  │ ✗ GPU Jobs   │   │ ✗ Distributed  │
     └──────────────┘  └──────────────┘   └────────────────┘
 ```
 

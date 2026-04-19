@@ -32,7 +32,7 @@
 On-Prem AD Server (LDAP)
   │
   │ LDAPS (:636)
-  │ DX 경유
+  │ via Direct Connect
   │
   ▼
 ┌──────────────────────────────────────────────────────────┐
@@ -56,15 +56,15 @@ On-Prem AD Server (LDAP)
            │ OIDC Tokens (JWT)
            ▼
    ┌──────────────────────────────────────────────────┐
-   │         서비스별 인증 흐름                       │
+   │  Per-Service Auth Flow                           │
    │                                                  │
-   │  Browser 접근 (Authorization Code Flow):         │
+   │  Browser (Authorization Code Flow):              │
    │    User → Service → Keycloak Login → Token       │
-   │    → Service (JWT 검증) → 접근 허용              │
+   │    → Service (verify JWT) → grant access         │
    │                                                  │
-   │  API 접근 (Bearer Token):                        │
-   │    Client → Token 요청 → Keycloak → JWT          │
-   │    → OSMO API (JWT 검증 + gpu_quota) → 실행      │
+   │  API (Bearer Token):                             │
+   │    Client → request token → Keycloak → JWT       │
+   │    → OSMO API (verify JWT + gpu_quota) → run     │
    └──────────────────────────────────────────────────┘
 ```
 
@@ -100,16 +100,16 @@ On-Prem AD Server (LDAP)
 ```
                   ┌───────────┬───────────┬───────────┐
                   │researcher │ engineer  │  viewer   │
-                  │(ML연구자) │(MLOps)    │(매니저)   │
+                  │(ML Res.)  │(MLOps)    │(Manager)  │
 ┌─────────────────┼───────────┼───────────┼───────────┤
 │ JupyterHub      │  Login    │  Login    │     -     │
-│ OSMO 학습 제출  │  4 GPU    │ 10 GPU    │     -     │
-│ Grafana 보기    │    ✓      │    ✓      │    ✓      │
-│ Grafana 편집    │    -      │    ✓      │     -     │
-│ MLflow 조회     │    ✓      │    ✓      │    ✓      │
-│ MLflow 모델관리 │    ✓      │    ✓      │     -     │
+│ OSMO Submit     │  4 GPU    │ 10 GPU    │     -     │
+│ Grafana View    │    ✓      │    ✓      │    ✓      │
+│ Grafana Edit    │    -      │    ✓      │     -     │
+│ MLflow Read     │    ✓      │    ✓      │    ✓      │
+│ MLflow Manage   │    ✓      │    ✓      │     -     │
 │ Ray Dashboard   │    ✓      │    ✓      │     -     │
-│ ClickHouse 쿼리 │    ✓      │    ✓      │    ✓      │
+│ ClickHouse SQL  │    ✓      │    ✓      │    ✓      │
 └─────────────────┴───────────┴───────────┴───────────┘
 ```
 

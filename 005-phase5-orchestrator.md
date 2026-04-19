@@ -28,7 +28,7 @@
 ### 워크플로우 제출 → 실행 흐름
 
 ```
-연구자 (JupyterHub 또는 CLI)
+Researcher (JupyterHub or CLI)
   │
   │  POST /api/workflows
   │  Authorization: Bearer <jwt>
@@ -36,10 +36,10 @@
 ┌───────────────────────────────────────────────────────────┐
 │ OSMO Controller (Management Subnet)                       │
 │                                                           │
-│  1. JWT 검증 (Keycloak issuer)                            │
-│  2. gpu_quota 확인 (researcher: 4, engineer: 10)          │
-│  3. 워크플로우 파라미터 검증                              │
-│  4. RayJob CRD 생성                                       │
+│  1. Verify JWT (Keycloak issuer)                          │
+│  2. Check gpu_quota (researcher: 4, engineer: 10)         │
+│  3. Validate workflow parameters                          │
+│  4. Create RayJob CRD                                     │
 └───────────────────┬───────────────────────────────────────┘
                     │
                     │ RayJob CRD
@@ -47,10 +47,10 @@
 ┌───────────────────────────────────────────────────────────┐
 │ KubeRay Operator                                          │
 │                                                           │
-│  1. RayJob 감지                                           │
-│  2. Ray Cluster 생성 (Head + Workers)                     │
-│  3. 학습 entrypoint 실행                                  │
-│  4. 완료 후 Ray Cluster 자동 삭제                         │
+│  1. Detect RayJob CRD                                     │
+│  2. Create Ray Cluster (Head + Workers)                   │
+│  3. Execute training entrypoint                           │
+│  4. Auto-delete Ray Cluster on completion                 │
 └───────────────────┬───────────────────────────────────────┘
                     │
         ┌───────────┴───────────┐
@@ -58,8 +58,8 @@
 ┌──────────────┐      ┌─────────────────────────────────────┐
 │ Ray Head     │      │ Ray Workers (GPU Nodes)             │
 │ (Mgmt Node)  │      │                                     │
-│              │      │  Karpenter가 g6e.48xlarge           │
-│ Dashboard    │◄────▶│  프로비저닝                         │
+│              │      │  Karpenter provisions g7e.48xlarge   │
+│ Dashboard    │◄────▶│  on demand                          │
 │ GCS          │ :6379│                                     │
 │ :8265        │      │  Worker 1: 8x L40S                  │
 │              │      │  Worker 2: 8x L40S                  │
@@ -70,32 +70,32 @@
 ### GPU 프로비저닝 흐름
 
 ```
-RayJob 생성 (gpu: 8, num_nodes: 2)
+RayJob created (gpu: 8, num_nodes: 2)
   │
   ▼
 Kubernetes Scheduler
   │  Pending Pod (nvidia.com/gpu: 8)
   ▼
 Karpenter
-  │  1. Pending Pod 감지
-  │  2. NodePool: gpu-pool 매칭
-  │  3. EC2 API → g6e.48xlarge 시작
-  │  4. EFA 활성화, FSx mount
+  │  1. Detect Pending Pod
+  │  2. Match NodePool: gpu-pool
+  │  3. EC2 API → launch g7e.48xlarge
+  │  4. Enable EFA, FSx mount
   ▼
 GPU Node Ready
   │
   ▼
-Pod Scheduled → 학습 시작
+Pod Scheduled → training starts
   │
-  │  (학습 완료)
+  │  (training complete)
   ▼
-Ray Cluster 삭제
+Ray Cluster deleted
   │
   ▼
 Karpenter consolidation
   │  consolidateAfter: 5m
   ▼
-GPU Node 종료 (비용 절감)
+GPU Node terminated (cost savings)
 ```
 
 ### 학습 실행 중 데이터 흐름
@@ -103,16 +103,16 @@ GPU Node 종료 (비용 절감)
 ```
 ┌─ Ray Worker Pod (GPU Node) ──────────────────────────────────┐
 │                                                              │
-│  Isaac Lab + rsl_rl 학습 루프                                │
+│  Isaac Lab + rsl_rl training loop                            │
 │    │                                                         │
-│    ├── 체크포인트 저장 ──▶ /mnt/fsx/checkpoints/             │
+│    ├── save checkpoint ──▶ /mnt/fsx/checkpoints/             │
 │    │                          │                              │
-│    │                     FSx → S3 (비동기 백업)              │
+│    │                     FSx → S3 (async backup)             │
 │    │                                                         │
-│    ├── 콜백 (10 iter 배치) ──▶ ClickHouse (HTTP :8123)       │
-│    │   training_metrics        (Phase 7)                     │
+│    ├── callback (10 iter batch) ──▶ ClickHouse (HTTP :8123)  │
+│    │   training_metrics             (Phase 7)                │
 │    │                                                         │
-│    ├── 학습 완료 시 ──────▶ MLflow (HTTPS)                   │
+│    ├── on completion ─────▶ MLflow (HTTPS)                   │
 │    │   params, final metrics    (Phase 6)                    │
 │    │   model artifact → S3                                   │
 │    │                                                         │
@@ -640,21 +640,21 @@ data:
       # 역할별 GPU 쿼터 정책
       # Keycloak realm role → GPU 상한 매핑
       role_quotas:
-        # admin: 전체 클러스터 GPU 사용 가능 (80 GPU = 10 x g6e.48xlarge)
+        # admin: 전체 클러스터 GPU 사용 가능 (80 GPU = 10 x g7e.48xlarge)
         admin:
           max_gpus: 80
           max_concurrent_jobs: 20
           priority: 100
           description: "관리자 — 전체 GPU 클러스터 접근"
 
-        # engineer: 최대 32 GPU (4 x g6e.48xlarge)
+        # engineer: 최대 32 GPU (4 x g7e.48xlarge)
         engineer:
           max_gpus: 32
           max_concurrent_jobs: 8
           priority: 50
           description: "엔지니어 — 중규모 학습 작업"
 
-        # researcher: 최대 16 GPU (2 x g6e.48xlarge)
+        # researcher: 최대 16 GPU (2 x g7e.48xlarge)
         researcher:
           max_gpus: 16
           max_concurrent_jobs: 4
@@ -714,15 +714,15 @@ JWT 토큰 수신
   │
   ├─ 4. audience 검증 (osmo client 확인)
   │
-  ├─ 5. gpu_quota 클레임 추출
-  │     └─ 클레임 없으면 → realm_access.roles에서 역할 확인 → role_quotas 매핑
+  ├─ 5. Extract gpu_quota claim
+  │     └─ If no claim → check realm_access.roles → map via role_quotas
   │
-  ├─ 6. 현재 사용 중인 GPU 수 조회
-  │     └─ training namespace의 PENDING/RUNNING RayJob GPU 합산
+  ├─ 6. Query current GPU usage
+  │     └─ Sum GPUs of PENDING/RUNNING RayJobs in training namespace
   │
-  └─ 7. 요청 GPU + 사용 중 GPU ≤ gpu_quota 검증
-        ├─ 통과 → RayJob 생성
-        └─ 초과 → 403 Forbidden 반환
+  └─ 7. Verify: requested GPU + in-use GPU ≤ gpu_quota
+        ├─ Pass → create RayJob
+        └─ Exceed → 403 Forbidden
 ```
 
 #### 5-5-4. OSMO 런타임 설정 ConfigMap
