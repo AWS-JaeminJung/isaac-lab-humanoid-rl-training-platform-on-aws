@@ -53,7 +53,7 @@ On-Premises (10.200.0.0/21)
 │   │ GPU Compute      │  │ Management       │  │ Infrastructure │   │
 │   │ 10.100.0.0/24    │  │ 10.100.1.0/24    │  │ 10.100.2.0/24  │   │
 │   │                  │  │                  │  │                │   │
-│   │ g6e.48xlarge x10 │  │ Keycloak, MLflow │  │ Internal ALB   │   │
+│   │ g7e.48xlarge x10 │  │ Keycloak, MLflow │  │ Internal ALB   │   │
 │   │ EFA, NCCL        │  │ JupyterHub, Ray  │  │ RDS PostgreSQL │   │
 │   │ FSx mount        │  │ OSMO, Grafana    │  │ FSx for Lustre │   │
 │   │                  │  │ ClickHouse       │  │ VPC Endpoints  │   │
@@ -98,32 +98,32 @@ On-Premises (10.200.0.0/21)
 ### Security Group 관계
 
 ```
-                    On-Prem (10.200.0.0/21)
-                         │ :443
-                         ▼
-                    ┌──────────┐
-                    │  SG-ALB  │
-                    └────┬─────┘
-                         │ :80, :443
-                         ▼
-                  ┌──────────────┐
-           ┌──── │ SG-Mgmt-Node │ ────┐
-           │     └──────┬───────┘     │
-           │            │             │
-    :8265, :6379  all traffic   :5432, :6379
-           │            │             │
-           ▼            ▼             ▼
-    ┌──────────────┐              ┌───────────┐
-    │ SG-GPU-Node  │              │ SG-Storage│
-    │ (self: all)  │──── :988 ───▶│ FSx, RDS  │
-    └──────┬───────┘              └───────────┘
-           │
-           │ :443
-           ▼
-    ┌────────────────┐
-    │ SG-VPC-Endpoint│
-    │ (10.100.0.0/21)│
-    └────────────────┘
+                   On-Prem (10.200.0.0/21)
+                        │ :443
+                        ▼
+                   ┌──────────┐
+                   │  SG-ALB  │
+                   └────┬─────┘
+                        │ :80, :443
+                        ▼
+                 ┌──────────────┐
+          ┌───── │ SG-Mgmt-Node │ ─────┐
+          │      └──────┬───────┘      │
+          │             │              │
+   :8265, :6379   all traffic    :5432, :6379
+          │             │              │
+          ▼             ▼              ▼
+   ┌──────────────┐             ┌───────────┐
+   │ SG-GPU-Node  │             │ SG-Storage│
+   │ (self: all)  │── :988 ──▶  │ FSx, RDS  │
+   └──────┬───────┘             └───────────┘
+          │
+          │ :443
+          ▼
+   ┌────────────────┐
+   │ SG-VPC-Endpoint│
+   │ (10.100.0.0/21)│
+   └────────────────┘
 ```
 
 ---
@@ -145,11 +145,11 @@ DNS resolution: enabled
 
 ### 1-2. 서브넷 생성
 
-모든 서브넷은 **동일 AZ**에 생성한다 (예: us-east-1a). g6e.48xlarge 인스턴스 가용 AZ를 사전 확인할 것.
+모든 서브넷은 **동일 AZ**에 생성한다 (예: us-east-1a). g7e.48xlarge 인스턴스 가용 AZ를 사전 확인할 것.
 
 | 서브넷 | CIDR | IPs | 용도 |
 |--------|------|-----|------|
-| GPU Compute | 10.100.0.0/24 | 254 | g6e.48xlarge 노드 + Pod |
+| GPU Compute | 10.100.0.0/24 | 254 | g7e.48xlarge 노드 + Pod |
 | Management | 10.100.1.0/24 | 254 | CPU 관리 노드 + Pod |
 | Infrastructure | 10.100.2.0/24 | 254 | ALB, RDS, FSx, VPC Endpoints |
 | Reserved | 10.100.3.0/24 | 254 | 확장용 |
