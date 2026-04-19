@@ -39,30 +39,30 @@ The platform is deployed in 10 sequential phases, each building on the outputs o
 ### Architecture Diagram
 
 ```
-On-Prem Network (10.200.0.0/21)             AWS VPC (10.100.0.0/21)
-┌─────────────────────────┐                  ┌──────────────────────────────────────────────┐
-│                         │                  │                                              │
-│  Active Directory       │   Direct         │  EKS Cluster (private-only API)              │
-│  (LDAPS:636)       ─────┼── Connect ──────►│  ├── Management Nodes (x86, AL2023)          │
-│                         │                  │  │   ├── Keycloak (2 replicas)                │
-│  GPU Machines           │                  │  │   ├── OSMO Controller                     │
-│  ├── RTX PRO 6000  ────┼── SSM Hybrid ───►│  │   ├── KubeRay Operator                    │
-│  ├── RTX PRO 6000       │   Activation     │  │   ├── MLflow + OAuth2 Proxy               │
-│  └── ...                │                  │  │   ├── ClickHouse + Fluent Bit              │
-│                         │                  │  │   ├── Prometheus + Grafana                 │
-│  Researchers            │                  │  │   └── JupyterHub                           │
-│  (Browser) ─────────────┼── DX + ALB ────►│  │                                            │
-│                         │                  │  └── GPU Nodes (Karpenter, 0→N Spot)          │
-│                         │                  │      └── g7e.48xlarge (8x L40S)               │
-│                         │                  │                                              │
-│                         │                  │  Storage                                     │
-│                         │                  │  ├── RDS PostgreSQL (Keycloak + MLflow)       │
-│                         │                  │  ├── FSx Lustre (shared training data)        │
-│                         │                  │  ├── S3: checkpoints, models, logs, data      │
-│                         │                  │  └── ECR: isaac-lab-training                  │
-│                         │                  │                                              │
-│                         │                  │  Network: No IGW/NAT, 18 VPC Endpoints       │
-└─────────────────────────┘                  └──────────────────────────────────────────────┘
+On-Prem Network (10.200.0.0/21)              AWS VPC (10.100.0.0/21)
+┌──────────────────────────┐                 ┌─────────────────────────────────────────────┐
+│                          │                 │                                             │
+│  Active Directory        │   Direct        │  EKS Cluster (private-only API)             │
+│  (LDAPS:636)        ─────┼── Connect ─────►│  ├── Management Nodes (x86, AL2023)         │
+│                          │                 │  │   ├── Keycloak (2 replicas)              │
+│  GPU Machines            │                 │  │   ├── OSMO Controller                    │
+│  ├── RTX PRO 6000  ─────┼── SSM Hybrid ──►│  │   ├── KubeRay Operator                    │
+│  ├── RTX PRO 6000        │   Activation    │  │   ├── MLflow + OAuth2 Proxy              │
+│  └── ...                 │                 │  │   ├── ClickHouse + Fluent Bit            │
+│                          │                 │  │   ├── Prometheus + Grafana               │
+│  Researchers             │                 │  │   └── JupyterHub                         │
+│  (Browser) ──────────────┼── DX + ALB ───►│  │                                           │
+│                          │                 │  └── GPU Nodes (Karpenter, 0→N Spot)        │
+│                          │                 │      └── g7e.48xlarge (8x L40S)             │
+│                          │                 │                                             │
+│                          │                 │  Storage                                    │
+│                          │                 │  ├── RDS PostgreSQL (Keycloak + MLflow)     │
+│                          │                 │  ├── FSx Lustre (shared training data)      │
+│                          │                 │  ├── S3: checkpoints, models, logs, data    │
+│                          │                 │  └── ECR: isaac-lab-training                │
+│                          │                 │                                             │
+│                          │                 │  Network: No IGW/NAT, 18 VPC Endpoints      │
+└──────────────────────────┘                 └─────────────────────────────────────────────┘
 ```
 
 ---
