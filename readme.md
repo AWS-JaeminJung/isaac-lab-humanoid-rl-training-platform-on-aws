@@ -16,7 +16,7 @@ H1 humanoid locomotion 정책을 대규모 GPU 클러스터에서 학습하고, 
 | 분산학습 / HPO | [Ray](https://docs.ray.io/en/latest/) (TorchTrainer, Tune) | 멀티노드 학습, 하이퍼파라미터 최적화 |
 | 워크플로우 오케스트레이션 | [NVIDIA OSMO](https://docs.nvidia.com/osmo/) + [KubeRay](https://docs.ray.io/en/latest/cluster/kubernetes/index.html) | 학습 작업 제출/관리 |
 | 컨테이너 오케스트레이션 | [Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/) | GPU/CPU 노드 관리 |
-| GPU 오토스케일 | [Karpenter](https://karpenter.sh/docs/) | g6e.48xlarge 0-10대 |
+| GPU 오토스케일 | [Karpenter](https://karpenter.sh/docs/) | g7e.48xlarge 0-10대 |
 | 고속 스토리지 | [FSx for Lustre](https://docs.aws.amazon.com/fsx/latest/LustreGuide/) | 체크포인트, 멀티노드 공유 |
 | 실험 추적 / 모델 레지스트리 | [MLflow](https://mlflow.org/docs/latest/index.html) + S3 | 실험 메타데이터, 모델 버전 관리, 아티팩트 |
 | 학습 로그 수집/분석 | [ClickHouse](https://clickhouse.com/docs) + [Fluent Bit](https://docs.fluentbit.io/manual/) | iteration 메트릭, raw 로그, SQL 분석 |
@@ -32,21 +32,21 @@ H1 humanoid locomotion 정책을 대규모 GPU 클러스터에서 학습하고, 
 ```
 On-Premises (10.200.0.0/21)
   ├── AD Server (LDAP)
-  ├── RTX Pro 6000 x15 (단일 GPU: eval, debug, 시각화)
+  ├── RTX Pro 6000 x15 (single GPU: eval, debug, viz)
   └── Direct Connect ──→ AWS VPC
 
 AWS VPC (10.100.0.0/21, Single AZ)
   ├── GPU Compute Subnet (10.100.0.0/24)
-  │   └── g6e.48xlarge x10 (8x L40S, EFA, FSx mount)
+  │   └── g7e.48xlarge x10 (8x L40S, EFA, FSx mount)
   ├── Management Subnet (10.100.1.0/24)
   │   └── Keycloak, JupyterHub, MLflow, ClickHouse,
   │       Grafana, Prometheus, Ray Head, OSMO, Karpenter
   ├── Infrastructure Subnet (10.100.2.0/24)
   │   └── Internal ALB, RDS, FSx for Lustre, VPC Endpoints x18
   ├── Reserved (10.100.3.0/24)
-  │   └── 확장용
-  ├── 미할당 (10.100.4.0/22, 1,022 IPs)
-  │   └── 스케일업 시 서브넷 추가
+  │   └── future expansion
+  ├── Unallocated (10.100.4.0/22, 1,022 IPs)
+  │   └── add subnets on scale-up
   └── S3: checkpoints, models, logs-archive, training-data
 
 총 할당: 1,016 / 2,048 IPs (50%), 확장 여유 충분

@@ -29,12 +29,12 @@
 ### 연구자 작업 흐름
 
 ```
-연구자 (On-Prem 브라우저)
+Researcher (On-Prem Browser)
   │
   │ https://jupyter.internal
   ▼
 ┌─ Internal ALB ───────────────────────────────────────────────────┐
-│  TLS termination (*.internal 인증서)                             │
+│  TLS termination (*.internal certificate)                        │
 └──────────────────────────┬───────────────────────────────────────┘
                            │
                            ▼
@@ -61,31 +61,31 @@
 ```
 ┌─ User Notebook (CPU only, 2C/4Gi) ────────────────────────────────┐
 │                                                                   │
-│  1. 학습 제출                                                     │
+│  1. Submit Training                                               │
 │     osmo-client ──── HTTPS ────▶ OSMO API (osmo.internal)         │
-│     (Bearer JWT)                  → RayJob 생성                   │
-│                                   → Karpenter → GPU 프로비저닝    │
+│     (Bearer JWT)                  → create RayJob                 │
+│                                   → Karpenter → GPU provisioning  │
 │                                                                   │
-│  2. 실시간 모니터링                                               │
+│  2. Real-time Monitoring                                          │
 │     clickhouse-connect ──────▶ ClickHouse (:8123)                 │
 │     SQL query                   training_metrics                  │
 │     → pandas DataFrame                                            │
-│     → plotly 차트 (inline)                                        │
+│     → plotly chart (inline)                                       │
 │                                                                   │
-│  3. 실험 관리                                                     │
+│  3. Experiment Management                                         │
 │     mlflow ──── HTTPS ────────▶ MLflow (mlflow.internal)          │
-│     search_runs()                실험 목록, 파라미터 비교         │
-│     register_model()             모델 등록/스테이지 변경          │
+│     search_runs()                list experiments, compare params  │
+│     register_model()             register model / stage transition │
 │                                                                   │
-│  4. 결과 분석                                                     │
+│  4. Result Analysis                                               │
 │     clickhouse-connect ──────▶ ClickHouse                         │
-│     SQL JOIN (여러 학습 비교)                                     │
+│     SQL JOIN (compare runs)                                       │
 │     → pandas + plotly                                             │
-│     → 노트북 자체가 분석 기록                                     │
+│     → notebook as analysis record                                 │
 │                                                                   │
-│  5. 체크포인트 조회                                               │
+│  5. Checkpoint Access                                             │
 │     boto3 ────────────────────▶ S3 (VPC Endpoint)                 │
-│     체크포인트 목록/다운로드                                      │
+│     list/download checkpoints                                     │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -95,20 +95,20 @@
 Management Node (m6i.2xlarge)
   │
   ├── JupyterHub Pod
-  │     Hub:    0.5 CPU, 1Gi    (세션 관리, OAuth)
-  │     Proxy:  0.2 CPU, 256Mi  (트래픽 라우팅)
+  │     Hub:    0.5 CPU, 1Gi    (session mgmt, OAuth)
+  │     Proxy:  0.2 CPU, 256Mi  (traffic routing)
   │
-  ├── User Notebook Pod (동적 생성)
+  ├── User Notebook Pod (dynamically created)
   │     Per User: 2 CPU, 4Gi
-  │     Max Concurrent: ~10명
+  │     Max Concurrent: ~10 users
   │     Storage: 10Gi PVC (EBS gp3)
-  │     GPU: 없음 (제출/분석 전용)
+  │     GPU: none (submit/analysis only)
   │
   │     Lifecycle:
-  │       Login → Notebook Start → [작업] → 30min 비활성 → Auto Cull
-  │       또는 8시간 경과 → 강제 종료
+  │       Login → Notebook Start → [work] → 30min idle → Auto Cull
+  │       or 8hr elapsed → force terminate
   │
-  └── (다른 서비스 Pods ...)
+  └── (other service Pods ...)
 ```
 
 ---

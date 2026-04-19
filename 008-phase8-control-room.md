@@ -49,27 +49,27 @@
               │ Prometheus            │
               │ (Management Subnet)   │
               │                       │
-              │ Retention: 15일       │
+              │ Retention: 15 days    │
               │ Storage: EBS gp3 50Gi │
               │                       │
               │ Alertmanager          │
               │ → Slack / Email       │
               └───────────┬───────────┘
                           │
-                          │ Prometheus 데이터소스
+                          │ Prometheus datasource
                           ▼
               ┌────────────────────────────────────────────┐
               │ Grafana (Management Subnet)                │
               │                                            │
-              │  데이터소스:                               │
-              │    ├── Prometheus  (인프라, GPU 메트릭)    │
-              │    └── ClickHouse  (학습 메트릭, raw 로그) │
+              │  Datasources:                              │
+              │    ├── Prometheus  (infra, GPU metrics)    │
+              │    └── ClickHouse  (training metrics, logs)│
               │                                            │
-              │  대시보드:                                 │
+              │  Dashboards:                               │
               │    ├── Training     (reward, loss, timing) │
-              │    ├── HPO          (trial 비교, HP 분석)  │
-              │    ├── Infrastructure (노드, Pod, 디스크)  │
-              │    └── Cost         (GPU 시간, 노드 가동)  │
+              │    ├── HPO          (trial compare, HP)    │
+              │    ├── Infrastructure (node, Pod, disk)    │
+              │    └── Cost         (GPU hours, uptime)    │
               │                                            │
               │  Auth: Keycloak OIDC                       │
               │    engineer → Editor                       │
@@ -78,7 +78,7 @@
                           │
                           │ HTTPS (Internal ALB)
                           ▼
-              연구자 브라우저 (On-Prem via DX)
+              Researcher Browser (On-Prem via DX)
 ```
 
 ### 알림 흐름
@@ -86,23 +86,23 @@
 ```
 Prometheus Alert Rules
   │
-  │ 조건 충족 (e.g. GPU temp > 85°C, 5분 지속)
+  │ condition met (e.g. GPU temp > 85°C for 5min)
   ▼
 Alertmanager
   │
   ├── severity: critical ──▶ Slack #alerts-critical
-  │                          + PagerDuty (선택)
+  │                          + PagerDuty (optional)
   │
   ├── severity: warning ──▶ Slack #alerts-warning
   │
   └── severity: info ──────▶ Grafana annotation only
 
 Alert Examples:
-  ├── GPUTemperatureHigh     (GPU 온도 > 85°C)
-  ├── GPUMemoryFull          (GPU 메모리 > 95%)
-  ├── TrainingStalled        (30분간 새 메트릭 없음)
-  ├── NodeNotReady           (노드 NotReady 5분)
-  └── PVCAlmostFull          (PVC 사용량 > 90%)
+  ├── GPUTemperatureHigh     (GPU temp > 85°C)
+  ├── GPUMemoryFull          (GPU memory > 95%)
+  ├── TrainingStalled        (no new metrics for 30min)
+  ├── NodeNotReady           (node NotReady for 5min)
+  └── PVCAlmostFull          (PVC usage > 90%)
 ```
 
 ---

@@ -30,26 +30,26 @@
 ```
 ┌─ Ray Worker Pod (GPU Node) ──────────────────────────────────────┐
 │                                                                  │
-│  rsl_rl 학습 루프                                                │
+│  rsl_rl training loop                                            │
 │    │                                                             │
-│    ├─ ClickHouseLogger 콜백                                      │
-│    │   매 10 iteration 배치                                      │
-│    │   구조화 메트릭 직접 INSERT                                 │
-│    │   (파싱 없음, 타입 보장)                                    │
+│    ├─ ClickHouseLogger callback                                  │
+│    │   every 10 iteration batch                                  │
+│    │   structured metrics direct INSERT                          │
+│    │   (no parsing, type-safe)                                   │
 │    │         │                                                   │
 │    │         │ HTTP POST :8123                                   │
 │    │         ▼                                                   │
 │    │   ┌──────────────────────────────────────────────────┐      │
 │    │   │          ClickHouse (Management Subnet)          │      │
 │    │   │                                                  │      │
-│    │   │  training_metrics    ◄── 콜백 직접 INSERT        │      │
-│    │   │  (TTL: 180일)           구조화, 분석 가능        │      │
+│    │   │  training_metrics    ◄── callback direct INSERT   │      │
+│    │   │  (TTL: 180d)            structured, queryable    │      │
 │    │   │                                                  │      │
 │    │   │  training_raw_logs   ◄── Fluent Bit              │      │
-│    │   │  (TTL: 90일)            파싱 없이 원본 저장      │      │
+│    │   │  (TTL: 90d)             raw text, no parsing     │      │
 │    │   │                                                  │      │
-│    │   │  training_summary    ◄── 학습 완료 시 INSERT     │      │
-│    │   │  (영구 보관)            학습 건당 1행            │      │
+│    │   │  training_summary    ◄── INSERT on completion    │      │
+│    │   │  (permanent)            one row per training run  │      │
 │    │   │                                                  │      │
 │    │   │  Storage: EBS gp3 50Gi                           │      │
 │    │   └──────────────────────────────────────────────────┘      │
@@ -58,9 +58,9 @@
 │         │                                                        │
 │         ▼                                                        │
 │    ┌───────────────┐                                             │
-│    │ Fluent Bit    │  DaemonSet (모든 노드)                      │
-│    │ (사이드카 아님)│  /var/log/containers/*training*.log        │
-│    │               │  파싱 없이 raw 텍스트 전송                  │
+│    │ Fluent Bit    │  DaemonSet (all nodes)                      │
+│    │ (not sidecar) │  /var/log/containers/*training*.log        │
+│    │               │  forward raw text, no parsing               │
 │    └───────┬───────┘                                             │
 │            │ HTTP POST :8123                                     │
 │            └──────────────▶ training_raw_logs                    │
@@ -87,30 +87,30 @@ TTL              180일                              90일
 ### 로그 Lifecycle
 
 ```
-학습 시작
+Training starts
   │
   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ Hot (0~90일)                                                    │
-│   training_metrics    iteration 메트릭 (콜백)                   │
-│   training_raw_logs   raw 텍스트 (Fluent Bit)                   │
-│   training_summary    학습 요약 (영구)                          │
+│ Hot (0~90 days)                                                 │
+│   training_metrics    iteration metrics (callback)              │
+│   training_raw_logs   raw text (Fluent Bit)                     │
+│   training_summary    training summary (permanent)              │
 └────────────────────────────┬────────────────────────────────────┘
-                             │ 90일 경과
+                             │ after 90 days
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ Warm (90~180일)                                                 │
-│   training_metrics    메트릭만 유지                             │
-│   training_raw_logs   TTL 삭제 (자동)                           │
-│   training_summary    영구                                      │
+│ Warm (90~180 days)                                              │
+│   training_metrics    metrics only retained                     │
+│   training_raw_logs   TTL expired (auto-deleted)                │
+│   training_summary    permanent                                 │
 └────────────────────────────┬────────────────────────────────────┘
-                             │ 180일 경과
+                             │ after 180 days
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ Archive (180일+)                                                │
-│   training_metrics    TTL 삭제 (자동)                           │
-│   training_summary    영구                                      │
-│   S3 Glacier          raw 전체 백업 (필요시 복구)               │
+│ Archive (180+ days)                                             │
+│   training_metrics    TTL expired (auto-deleted)                │
+│   training_summary    permanent                                 │
+│   S3 Glacier          full raw backup (restore on demand)       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

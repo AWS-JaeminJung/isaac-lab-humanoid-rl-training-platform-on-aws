@@ -28,12 +28,12 @@
 ### MLflow 데이터 흐름
 
 ```
-학습 Pod (Ray Worker)
+Training Pod (Ray Worker)
   │
-  │  mlflow.log_params()        학습 시작 시
-  │  mlflow.log_metrics()       학습 완료 시 (최종 메트릭만)
-  │  mlflow.log_artifact()      체크포인트 업로드
-  │  mlflow.register_model()    모델 레지스트리 등록
+  │  mlflow.log_params()        at training start
+  │  mlflow.log_metrics()       at completion (final metrics only)
+  │  mlflow.log_artifact()      checkpoint upload
+  │  mlflow.register_model()    register to model registry
   │
   ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -63,34 +63,34 @@
         │
         │ HTTPS (OAuth2 Proxy → Keycloak OIDC)
         ▼
-연구자 브라우저 (On-Prem via DX)
-  • 실험 비교
-  • 모델 버전 관리
-  • 아티팩트 다운로드
+Researcher Browser (On-Prem via DX)
+  • experiment comparison
+  • model version management
+  • artifact download
 ```
 
 ### MLflow vs ClickHouse 역할 분담
 
 ```
-학습 Pod
+Training Pod
   │
-  ├──── 매 10 iteration ────▶ ClickHouse (Phase 7)
-  │     구조화 메트릭                training_metrics
-  │     (mean_reward, loss,          • iteration-level 상세
-  │      grad_norm, timing...)       • SQL 분석/비교
-  │                                  • Grafana 시각화
+  ├──── every 10 iterations ──▶ ClickHouse (Phase 7)
+  │     structured metrics           training_metrics
+  │     (mean_reward, loss,          • iteration-level detail
+  │      grad_norm, timing...)       • SQL analysis/comparison
+  │                                  • Grafana visualization
   │
-  └──── 학습 완료 시 ───────▶ MLflow
-        최종 결과                     • best_reward, final_reward
-        하이퍼파라미터                 • learning_rate, gamma, ...
-        모델 아티팩트                  • checkpoint.pt → S3
-        모델 버전                     • Model Registry
+  └──── on completion ────────▶ MLflow
+        final results                 • best_reward, final_reward
+        hyperparameters               • learning_rate, gamma, ...
+        model artifacts               • checkpoint.pt → S3
+        model versions                • Model Registry
 ```
 
 ### 모델 Lifecycle
 
 ```
-학습 완료
+Training complete
   │
   ▼
 mlflow.register_model()
@@ -99,12 +99,12 @@ mlflow.register_model()
 ┌────────────┐    ┌────────────┐    ┌────────────┐    ┌────────────┐
 │   None     │───▶│  Staging   │───▶│ Production │───▶│  Archived  │
 │            │    │            │    │            │    │            │
-│ 자동 등록  │    │ 평가 대기  │    │ 배포 가능  │    │ 이전 버전  │
+│ Auto-reg   │    │ Eval pend. │    │ Deployable │    │ Prev ver.  │
 └────────────┘    └────────────┘    └────────────┘    └────────────┘
 
 Model: h1-locomotion
   v1: "baseline PPO"         → Archived
-  v2: "tuned rewards"        → Staging (eval 진행 중)
+  v2: "tuned rewards"        → Staging (eval in progress)
   v3: "final candidate"      → Production (현재 배포)
 ```
 

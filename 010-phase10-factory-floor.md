@@ -28,95 +28,95 @@ GPU 학습 — 학습 이미지, 1GPU → 멀티GPU → 멀티노드 → HPO, E2
 ### 단계별 검증 흐름
 
 ```
-Stage 1: 단일 GPU (1x L40S)
-  │  학습 스크립트 + 콜백 동작 확인
-  │  ClickHouse, MLflow 연동 검증
+Stage 1: Single GPU (1x L40S)
+  │  Verify training script + callback behavior
+  │  Validate ClickHouse, MLflow integration
   │
   ▼
-Stage 2: 멀티 GPU (8x L40S, 1 노드)
-  │  단일 노드 내 8 GPU 병렬 학습
-  │  NVLink intra-node 통신 확인
+Stage 2: Multi-GPU (8x L40S, 1 node)
+  │  8 GPU data-parallel training on single node
+  │  Verify NVLink intra-node communication
   │
   ▼
-Stage 3: 멀티 노드 (2 노드, 16 GPU)
-  │  EFA inter-node 통신 확인
-  │  FSx 공유 스토리지 확인
-  │  스케일링 효율 측정
+Stage 3: Multi-Node (2 nodes, 16 GPU)
+  │  Verify EFA inter-node communication
+  │  Validate FSx shared storage
+  │  Measure scaling efficiency
   │
   ▼
-Stage 4: HPO (Ray Tune, 12 trial)
-  │  ASHA 스케줄러 조기 중단
-  │  다수 trial 동시 실행 (최대 32 GPU)
-  │  trial별 메트릭/파라미터 기록
+Stage 4: HPO (Ray Tune, 12 trials)
+  │  ASHA scheduler early stopping
+  │  Concurrent trials (up to 32 GPU)
+  │  Per-trial metrics/params logging
   │
   ▼
-E2E 검증
-  전체 시스템 통합 테스트
+E2E Validation
+  Full system integration test
 ```
 
 ### E2E 전체 파이프라인
 
 ```
-연구자 (On-Prem)
+Researcher (On-Prem)
   │
-  │ 1. jupyter.internal 접속
+  │ 1. Access jupyter.internal
   ▼
-JupyterHub ─── Keycloak OIDC ──── AD 인증
+JupyterHub ─── Keycloak OIDC ──── AD auth
   │
-  │ 2. osmo-client로 학습 제출
+  │ 2. Submit training via osmo-client
   ▼
 OSMO Controller
-  │  JWT 검증, gpu_quota 확인
+  │  Verify JWT, check gpu_quota
   │
-  │ 3. RayJob CRD 생성
+  │ 3. Create RayJob CRD
   ▼
 KubeRay Operator
   │
-  │ 4. Ray Cluster 생성
+  │ 4. Create Ray Cluster
   ▼
-Karpenter ──── EC2 API ──── g6e.48xlarge 프로비저닝
+Karpenter ──── EC2 API ──── provision g7e.48xlarge
   │                          EFA, FSx mount
   │
-  │ 5. 학습 시작
+  │ 5. Training starts
   ▼
 ┌─ GPU Nodes ──────────────────────────────────────────────┐
 │                                                          │
-│  Isaac Lab + rsl_rl 학습 루프                            │
+│  Isaac Lab + rsl_rl training loop                        │
 │    │                                                     │
-│    ├── 체크포인트 ──▶ FSx ──▶ S3 (백업)                  │
-│    ├── 메트릭 ──────▶ ClickHouse (training_metrics)      │
+│    ├── checkpoint ──▶ FSx ──▶ S3 (backup)                │
+│    ├── metrics ─────▶ ClickHouse (training_metrics)      │
 │    ├── stdout ──────▶ Fluent Bit ──▶ ClickHouse (raw)    │
-│    └── 완료 시 ─────▶ MLflow (결과 + 모델)               │
+│    └── on complete ─▶ MLflow (results + model)           │
 │                                                          │
 │  DCGM Exporter ──▶ Prometheus ──▶ Grafana                │
 └──────────────────────────────────────────────────────────┘
   │
-  │ 6. 연구자 모니터링
+  │ 6. Researcher monitoring
   ▼
-┌─ 모니터링 ───────────────────────────────────────────────┐
+┌─ Monitoring ─────────────────────────────────────────────┐
 │  Grafana (grafana.internal)                              │
 │    ├── Training Dashboard: reward, loss, timing          │
 │    └── Infrastructure Dashboard: GPU util, temp          │
 │                                                          │
-│  JupyterHub 노트북 (jupyter.internal)                    │
+│  JupyterHub notebook (jupyter.internal)                  │
 │    ├── ClickHouse SQL → reward curve                     │
-│    └── MLflow API → 실험 비교                            │
+│    └── MLflow API → experiment comparison                │
 └──────────────────────────────────────────────────────────┘
   │
-  │ 7. 학습 완료
+  │ 7. Training complete
   ▼
 MLflow Model Registry
   │  None → Staging → Production
   │
-  │ 8. 모델 평가 (On-Prem GPU)
+  │ 8. Model eval (On-Prem GPU)
   ▼
-On-Prem RTX Pro 6000 (단일 GPU)
-  │  S3에서 체크포인트 다운로드
-  │  시뮬 실행, 결과 ClickHouse 전송
+On-Prem RTX Pro 6000 (single GPU)
+  │  Download checkpoint from S3
+  │  Run sim, send results to ClickHouse
   │
-  │ 9. GPU 노드 축소
+  │ 9. GPU node scale-down
   ▼
-Karpenter consolidation → GPU Node 종료 (비용 절감)
+Karpenter consolidation → GPU Node terminated (cost savings)
 ```
 
 ---
@@ -189,7 +189,7 @@ spec:
 ```
 
 검증 항목:
-- [ ] [Karpenter](https://karpenter.sh/docs/)가 g6e.48xlarge 프로비저닝
+- [ ] [Karpenter](https://karpenter.sh/docs/)가 g7e.48xlarge 프로비저닝
 - [ ] Pod 정상 스케줄링 → 학습 시작
 - [ ] ClickHouse training_metrics에 데이터 기록
 - [ ] ClickHouse training_raw_logs에 로그 기록
