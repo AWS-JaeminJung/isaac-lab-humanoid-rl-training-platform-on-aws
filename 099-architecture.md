@@ -59,7 +59,7 @@ On-Prem (10.200.0.0/21)
   ▼
 Virtual Private Gateway (vgw)
   │
-  ├── GPU Subnet (10.100.0.0/24)         ← g7e.48xlarge x10, EFA
+  ├── GPU Subnet (10.100.0.0/24)         ← Baseline g7e.48xlarge x2 (ASG) + Burst x0~N (Karpenter)
   ├── Management Subnet (10.100.1.0/24)  ← Keycloak, JupyterHub, MLflow, ...
   ├── Infrastructure Subnet (10.100.2.0/24) ← ALB, RDS, FSx, VPC Endpoints x18
   └── Reserved Subnet (10.100.3.0/24)    ← future expansion
@@ -89,8 +89,12 @@ EKS Control Plane (Private Endpoint Only)
   │     ├── CoreDNS, EBS/FSx CSI Drivers
   │     └── GPU Device Plugin
   │
-  └── GPU Nodes (Karpenter provisioned)
-        └── g7e.48xlarge x0~10 (8x L40S + EFA)
+  ├── GPU Baseline Node Group (ASG, g7e.48xlarge x2, On-Demand)
+  │     └── 상시 16 GPU, 장시간/멀티노드 학습용
+  │
+  └── GPU Burst Nodes (Karpenter provisioned, 0~N)
+        ├── gpu-burst-spot (weight=10): g7e/g6e/g5/p4d/p5 Spot
+        └── gpu-burst-od   (weight=1):  g7e.48xlarge On-Demand fallback
 
 Storage: FSx for Lustre (shared /mnt/fsx), EBS gp3, S3 (4 buckets)
 Database: RDS PostgreSQL (Multi-AZ)
@@ -104,7 +108,7 @@ IRSA: IAM Roles for Service Accounts
 
 ## 3. Phase 3: Hybrid Nodes (Bridge)
 
-On-Prem RTX Pro 6000 GPU를 EKS Hybrid Nodes로 등록하는 구성이다. Direct Connect를 통해 SSM Agent가 클러스터에 조인한다.
+On-Prem RTX Pro 6000 GPU를 EKS Hybrid Nodes로 등록하고, Hybrid Nodes Gateway로 Pod 네트워킹을 자동화하는 구성이다.
 
 ![Phase 3 Bridge](images/03-bridge.png)
 
@@ -120,6 +124,18 @@ On-Prem RTX Pro 6000 x15
   │ 4. Verify S3 access
   │
   └──── Direct Connect ────→ AWS EKS Control Plane
+
+Pod Networking (Hybrid Nodes Gateway):
+  VPC (Management Subnet)
+    Gateway Pod x2 (Active-Standby)
+      │
+      │ VXLAN Tunnel (UDP 8472)
+      │ VPC Route Table 자동 관리
+      │ CiliumVTEPConfig 자동 생성
+      │
+  On-Prem (Cilium VTEP)
+    Pod ←→ VPC Pod 양방향 통신 자동
+    BGP/Static Route 수동 설정 불필요
 ```
 
 </details>
@@ -175,7 +191,8 @@ OSMO Controller → RayJob CRD 생성
 KubeRay Operator → Ray Cluster (Head + Workers)
   │
   ▼
-Karpenter → provision g7e.48xlarge (8x L40S, EFA, FSx mount)
+Baseline (ASG): g7e.48xlarge x2 상시 대기 (즉시 스케줄링)
+Karpenter Burst: Spot 우선 → OD fallback (3~7분 프로비저닝)
 ```
 
 </details>
@@ -311,7 +328,7 @@ User Notebook (CPU only, 2C/4Gi, max 10 concurrent)
 1. Researcher (On-Prem) → jupyter.internal
 2. JupyterHub → Keycloak OIDC → AD 인증
 3. osmo-client → OSMO API → RayJob CRD
-4. KubeRay → Karpenter → provision g7e.48xlarge
+4. KubeRay → Baseline 노드(즉시) 또는 Karpenter Burst(Spot/OD, 3~7분)
 5. GPU 학습: Isaac Lab + rsl_rl
      ├── checkpoint → FSx → S3 (backup)
      ├── metrics → ClickHouse (training_metrics)
@@ -320,7 +337,7 @@ User Notebook (CPU only, 2C/4Gi, max 10 concurrent)
 6. DCGM Exporter → Prometheus → Grafana
 7. MLflow Model Registry: None → Staging → Production
 8. On-Prem GPU eval: S3에서 체크포인트 다운로드
-9. Karpenter consolidation → GPU Node 종료
+9. Burst 노드: Karpenter consolidation → 자동 종료 / Baseline 노드: 상시 유지
 ```
 
 </details>
@@ -379,7 +396,7 @@ Day 365   S3 Glacier or delete
 Phase 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10
 
  1. Foundation  — VPC, Subnets, DX, VPC Endpoints, SG, Route53, TLS
- 2. Platform    — EKS, CSI Drivers, RDS, S3, FSx, ECR, Karpenter, IRSA
+ 2. Platform    — EKS, GPU Baseline(ASG) + Burst(Karpenter), CSI Drivers, RDS, S3, FSx, ECR, IRSA
  3. Bridge      — EKS Hybrid Nodes, On-Prem GPU 환경 설정
  4. Gate        — Keycloak, AD Federation, OIDC, 역할/권한, GPU 쿼터
  5. Orchestrator — OSMO Controller, KubeRay, RBAC, CPU 테스트
