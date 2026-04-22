@@ -1,0 +1,93 @@
+{
+  "realm": "isaac-lab-production",
+  "enabled": true,
+  "displayName": "Isaac Lab Production",
+  "displayNameHtml": "<h1>Isaac Lab</h1>",
+  "sslRequired": "all",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "failureFactor": 5,
+  "accessTokenLifespan": 300,
+  "accessTokenLifespanForImplicitFlow": 300,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 36000,
+  "offlineSessionIdleTimeout": 2592000,
+  "offlineSessionMaxLifespan": 5184000,
+  "accessCodeLifespan": 60,
+  "accessCodeLifespanUserAction": 300,
+  "accessCodeLifespanLogin": 1800,
+  "actionTokenGeneratedByAdminLifespan": 43200,
+  "actionTokenGeneratedByUserLifespan": 300,
+  "oauth2DeviceCodeLifespan": 600,
+  "oauth2DevicePollingInterval": 5,
+  "defaultSignatureAlgorithm": "RS256",
+  "revokeRefreshToken": false,
+  "refreshTokenMaxReuse": 0,
+  "internationalizationEnabled": false,
+  "defaultLocale": "en",
+  "smtpServer": {},
+  "eventsEnabled": true,
+  "eventsExpiration": 604800,
+  "eventsListeners": ["jboss-logging"],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "researcher",
+        "description": "ML researcher — Baseline GPU access (max 16 GPU)",
+        "composite": false,
+        "clientRole": false,
+        "attributes": {
+          "gpu_quota": ["16"]
+        }
+      },
+      {
+        "name": "engineer",
+        "description": "MLOps engineer — Baseline + Burst GPU access (max 32 GPU)",
+        "composite": false,
+        "clientRole": false,
+        "attributes": {
+          "gpu_quota": ["32"]
+        }
+      },
+      {
+        "name": "admin",
+        "description": "Admin — full cluster GPU access (max 80 GPU)",
+        "composite": false,
+        "clientRole": false,
+        "attributes": {
+          "gpu_quota": ["80"]
+        }
+      },
+      {
+        "name": "viewer",
+        "description": "Read-only viewer with no GPU allocation",
+        "composite": false,
+        "clientRole": false,
+        "attributes": {
+          "gpu_quota": ["0"]
+        }
+      }
+    ]
+  },
+  "defaultDefaultClientScopes": [
+    "web-origins",
+    "acr",
+    "profile",
+    "roles",
+    "email"
+  ],
+  "defaultOptionalClientScopes": [
+    "offline_access",
+    "address",
+    "phone",
+    "microprofile-jwt"
+  ]
+}

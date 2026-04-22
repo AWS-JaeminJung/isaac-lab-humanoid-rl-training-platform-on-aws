@@ -1,0 +1,36 @@
+{
+  "roles": [
+    {
+      "name": "researcher",
+      "description": "ML researcher — Baseline GPU access (max 16 GPU)",
+      "attributes": {
+        "gpu_quota": "16"
+      },
+      "ad_group": "CN=ML-Researchers,OU=Groups,DC=corp,DC=internal"
+    },
+    {
+      "name": "engineer",
+      "description": "MLOps engineer — Baseline + Burst GPU access (max 32 GPU)",
+      "attributes": {
+        "gpu_quota": "32"
+      },
+      "ad_group": "CN=MLOps-Engineers,OU=Groups,DC=corp,DC=internal"
+    },
+    {
+      "name": "admin",
+      "description": "Admin — full cluster GPU access (max 80 GPU)",
+      "attributes": {
+        "gpu_quota": "80"
+      },
+      "ad_group": "CN=ML-Admins,OU=Groups,DC=corp,DC=internal"
+    },
+    {
+      "name": "viewer",
+      "description": "Read-only viewer with no GPU allocation",
+      "attributes": {
+        "gpu_quota": "0"
+      },
+      "ad_group": "CN=ML-Managers,OU=Groups,DC=corp,DC=internal"
+    }
+  ]
+}

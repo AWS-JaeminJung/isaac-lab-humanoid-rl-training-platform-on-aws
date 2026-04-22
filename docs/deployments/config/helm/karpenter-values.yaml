@@ -1,0 +1,41 @@
+################################################################################
+# Karpenter Helm Values
+#
+# Chart: oci://public.ecr.aws/karpenter/karpenter
+# Version: ~1.1.x
+#
+# Note: clusterName, clusterEndpoint, and serviceAccount.annotations are
+# overridden via --set flags in the deploy script. This file contains the
+# static configuration.
+################################################################################
+
+replicas: 2
+
+# Run Karpenter controller on management nodes only
+nodeSelector:
+  node-type: management
+
+tolerations: []
+
+# Pod disruption budget - keep at least 1 replica during rolling updates
+podDisruptionBudget:
+  minAvailable: 1
+
+# Resource requests/limits for the Karpenter controller
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# Logging
+logLevel: info
+
+# Karpenter settings
+settings:
+  # How long to wait for additional pending pods before launching a node
+  batchIdleDuration: 1s
+  # Maximum time to wait before launching a node
+  batchMaxDuration: 10s

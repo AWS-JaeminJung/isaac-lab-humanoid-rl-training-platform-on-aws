@@ -1,0 +1,105 @@
+################################################################################
+# Stage 2: Multi-GPU RayJob - H1 Humanoid Training (8 GPUs, Single Node)
+#
+# Runs a multi-GPU training job using torch.distributed on a single
+# g7e.48xlarge node (8 L40S GPUs) to validate data-parallel scaling:
+#   - PyTorch DDP with 8 GPU processes
+#   - ClickHouse metrics logging
+#   - GPU utilization monitoring via DCGM
+#
+# Usage:
+#   export ECR_REPO_URL=123456789012.dkr.ecr.us-east-1.amazonaws.com
+#   envsubst < stage2-rayjob.yaml | kubectl apply -f -
+################################################################################
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: h1-multi-gpu-validation
+  namespace: training
+  labels:
+    app.kubernetes.io/name: h1-multi-gpu-validation
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: training
+    isaac-lab/stage: "2"
+    isaac-lab/validation: "true"
+spec:
+  entrypoint: >-
+    python -m torch.distributed.run
+    --nproc_per_node=8
+    /workspace/scripts/train.py
+    --task H1-v0
+    --num_envs 4096
+    --max_iterations 500
+    --headless
+    --device cuda
+
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 300
+
+  rayClusterSpec:
+    rayVersion: "2.42.1"
+
+    headGroupSpec:
+      serviceType: ClusterIP
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-cpus: "16"
+        num-gpus: "8"
+      template:
+        metadata:
+          labels:
+            ray.io/node-type: head
+            isaac-lab/stage: "2"
+        spec:
+          nodeSelector:
+            node-type: gpu
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: ray-head
+              image: ${ECR_REPO_URL}/isaac-lab-training:v1.0.0
+              ports:
+                - containerPort: 6379
+                  name: gcs-server
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+              env:
+                - name: WORKFLOW_ID
+                  value: "h1-multi-gpu-validation"
+                - name: CLICKHOUSE_HOST
+                  value: "clickhouse.logging.svc.cluster.local"
+                - name: MLFLOW_TRACKING_URI
+                  value: "http://mlflow.model-registry.svc.cluster.local:5000"
+                - name: NCCL_DEBUG
+                  value: "WARN"
+              resources:
+                requests:
+                  cpu: "16"
+                  memory: "64Gi"
+                  nvidia.com/gpu: "8"
+                limits:
+                  cpu: "48"
+                  memory: "192Gi"
+                  nvidia.com/gpu: "8"
+              volumeMounts:
+                - name: fsx-storage
+                  mountPath: /mnt/fsx
+                - name: shm
+                  mountPath: /dev/shm
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh", "-c", "ray stop"]
+          volumes:
+            - name: fsx-storage
+              persistentVolumeClaim:
+                claimName: fsx-training
+            - name: shm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Gi
+          restartPolicy: Never

@@ -1,0 +1,198 @@
+################################################################################
+# Network Policies for Phase 05 - Orchestrator
+#
+# Defines network segmentation rules for the orchestration, training, and
+# ray-system namespaces to enforce least-privilege communication.
+################################################################################
+
+# ===========================================================================
+# 1. OSMO API Ingress Policy (orchestration namespace)
+#
+# Allows inbound traffic to the OSMO API from:
+#   - JupyterHub namespace (user-initiated training requests)
+#   - kube-system namespace (ALB controller health checks)
+# Also allows Prometheus scraping on the metrics port.
+# ===========================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: osmo-api-ingress
+  namespace: orchestration
+  labels:
+    app.kubernetes.io/name: osmo-controller
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: orchestration
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: osmo-controller
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from JupyterHub namespace on API port
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/component: jupyterhub
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow from ALB controller (kube-system) on API port
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow Prometheus scraping on metrics port
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/component: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+
+# ===========================================================================
+# 2. Ray Internal Communication Policy (training namespace)
+#
+# Allows Ray head and worker pods to communicate internally on Ray ports.
+# Also allows DNS resolution for service discovery.
+# ===========================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ray-internal-communication
+  namespace: training
+  labels:
+    app.kubernetes.io/name: ray-cluster
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: training
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: isaac-lab
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow internal pod-to-pod communication on Ray ports
+    - from:
+        - podSelector: {}
+      ports:
+        # GCS server port
+        - protocol: TCP
+          port: 6379
+        # Ray Dashboard
+        - protocol: TCP
+          port: 8265
+        # Ray Client server
+        - protocol: TCP
+          port: 10001
+        # Ray Object Manager
+        - protocol: TCP
+          port: 10002
+        # Ray worker port range (min)
+        - protocol: TCP
+          port: 20000
+        - protocol: TCP
+          port: 20001
+        - protocol: TCP
+          port: 20002
+        - protocol: TCP
+          port: 20003
+        - protocol: TCP
+          port: 20004
+        - protocol: TCP
+          port: 25000
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow internal pod-to-pod communication
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 8265
+        - protocol: TCP
+          port: 10001
+        - protocol: TCP
+          port: 10002
+        - protocol: TCP
+          port: 20000
+        - protocol: TCP
+          port: 20001
+        - protocol: TCP
+          port: 20002
+        - protocol: TCP
+          port: 20003
+        - protocol: TCP
+          port: 20004
+        - protocol: TCP
+          port: 25000
+
+# ===========================================================================
+# 3. Allow OSMO to Training Policy (training namespace)
+#
+# Allows the OSMO Controller (from orchestration namespace) and the KubeRay
+# Operator (from ray-system namespace) to communicate with Ray clusters in
+# the training namespace.
+# ===========================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-osmo-to-training
+  namespace: training
+  labels:
+    app.kubernetes.io/name: osmo-to-training
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: training
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow OSMO Controller from orchestration namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/component: orchestration
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: osmo-controller
+      ports:
+        # Ray Dashboard
+        - protocol: TCP
+          port: 8265
+        # GCS server
+        - protocol: TCP
+          port: 6379
+    # Allow KubeRay Operator from ray-system namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/component: ray-operator
+      ports:
+        # GCS server
+        - protocol: TCP
+          port: 6379
+        # Ray Dashboard
+        - protocol: TCP
+          port: 8265
+        # Ray Client server
+        - protocol: TCP
+          port: 10001

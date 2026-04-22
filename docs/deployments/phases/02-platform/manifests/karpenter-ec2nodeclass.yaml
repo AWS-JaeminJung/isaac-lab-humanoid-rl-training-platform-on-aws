@@ -1,0 +1,110 @@
+################################################################################
+# Karpenter EC2NodeClass: gpu-class
+#
+# Defines how Karpenter provisions EC2 instances for GPU burst workloads.
+# Used by both gpu-burst-spot and gpu-burst-od NodePools.
+# Uses AL2023 EKS-optimized GPU AMI with EFA networking and FSx mount.
+#
+# Requirements:
+#   - Replace CLUSTER_NAME with actual cluster name
+#   - Subnet and security group selectors use tag-based discovery
+################################################################################
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: gpu-class
+spec:
+  # Use the Karpenter node IAM role
+  role: CLUSTER_NAME-karpenter-node
+
+  # AMI selection: AL2023 EKS-optimized GPU AMI
+  amiSelectorTerms:
+    - alias: al2023@latest
+  amiFamily: AL2023
+
+  # Subnet selection: GPU compute subnet
+  subnetSelectorTerms:
+    - tags:
+        Name: "*gpu*"
+        karpenter.sh/discovery: CLUSTER_NAME
+
+  # Security group selection: SG-GPU-Node
+  securityGroupSelectorTerms:
+    - tags:
+        Name: "*gpu-node*"
+        karpenter.sh/discovery: CLUSTER_NAME
+
+  # Block device mapping: 200 GiB gp3 root volume
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 200Gi
+        volumeType: gp3
+        iops: 6000
+        throughput: 400
+        encrypted: true
+        deleteOnTermination: true
+
+  # Instance metadata options
+  metadataOptions:
+    httpEndpoint: enabled
+    httpProtocolIPv6: disabled
+    httpPutResponseHopLimit: 2
+    httpTokens: required
+
+  # Tags applied to provisioned instances
+  tags:
+    Name: CLUSTER_NAME-gpu-node
+    karpenter.sh/discovery: CLUSTER_NAME
+    node-type: gpu
+
+  # UserData script: configure EFA and mount FSx
+  userData: |
+    #!/bin/bash
+    set -euo pipefail
+
+    # -----------------------------------------------------------------------
+    # EFA driver verification
+    # -----------------------------------------------------------------------
+    echo "Verifying EFA driver..."
+    if lspci | grep -qi "Amazon Elastic Fabric Adapter"; then
+        echo "EFA device detected"
+    else
+        echo "WARNING: EFA device not found on this instance"
+    fi
+
+    # -----------------------------------------------------------------------
+    # NVIDIA driver verification
+    # -----------------------------------------------------------------------
+    echo "Verifying NVIDIA driver..."
+    if command -v nvidia-smi &>/dev/null; then
+        nvidia-smi
+        echo "NVIDIA driver loaded successfully"
+    else
+        echo "WARNING: nvidia-smi not found"
+    fi
+
+    # -----------------------------------------------------------------------
+    # Mount FSx for Lustre
+    # -----------------------------------------------------------------------
+    echo "Mounting FSx for Lustre..."
+    FSX_DNS_NAME="${FSX_DNS_NAME:-}"
+    FSX_MOUNT_NAME="${FSX_MOUNT_NAME:-}"
+
+    if [[ -n "${FSX_DNS_NAME}" && -n "${FSX_MOUNT_NAME}" ]]; then
+        yum install -y lustre-client 2>/dev/null || dnf install -y lustre-client 2>/dev/null || true
+        mkdir -p /mnt/fsx
+        mount -t lustre "${FSX_DNS_NAME}@tcp:/${FSX_MOUNT_NAME}" /mnt/fsx || {
+            echo "WARNING: Failed to mount FSx. Will be mounted via CSI driver."
+        }
+
+        # Create standard directory structure
+        mkdir -p /mnt/fsx/checkpoints
+        mkdir -p /mnt/fsx/datasets
+        mkdir -p /mnt/fsx/shared
+        echo "FSx mounted at /mnt/fsx"
+    else
+        echo "FSx environment variables not set, skipping host-level mount"
+    fi
+
+    echo "GPU node initialization complete"

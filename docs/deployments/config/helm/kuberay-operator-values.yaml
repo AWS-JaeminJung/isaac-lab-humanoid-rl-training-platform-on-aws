@@ -1,0 +1,43 @@
+################################################################################
+# KubeRay Operator Helm Values
+#
+# Chart: kuberay/kuberay-operator
+# Repo:  https://ray-project.github.io/kuberay-helm/
+# Version: ~1.2.x
+#
+# The KubeRay operator manages Ray clusters for distributed GPU training.
+# OSMO Controller creates RayJob CRDs; KubeRay provisions Ray clusters.
+################################################################################
+
+# Run operator on management nodes only
+nodeSelector:
+  node-type: management
+
+tolerations: []
+
+# Operator replica count
+replicaCount: 1
+
+# Resource requests/limits for the operator pod
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Watch all namespaces for RayCluster/RayJob/RayService CRDs
+watchNamespace: ""
+
+# Enable leader election for HA (useful when replicaCount > 1)
+leaderElection:
+  enabled: true
+
+# Logging
+logging:
+  level: info
+
+# Batch scheduling - enable Gang scheduling for multi-node training
+batchScheduler:
+  enabled: false

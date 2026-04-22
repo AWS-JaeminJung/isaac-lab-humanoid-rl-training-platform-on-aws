@@ -1,0 +1,110 @@
+################################################################################
+# MLflow Server Deployment
+#
+# Runs the MLflow tracking server with:
+#   - PostgreSQL backend store (RDS via ExternalSecret)
+#   - S3 artifact root for model storage
+#   - IRSA-annotated ServiceAccount for S3 access
+#   - Management node placement
+#
+# Requires:
+#   - ExternalSecret 'mlflow-db-credentials' synced in mlflow namespace
+#   - Environment variable S3_MODELS_BUCKET set before applying via envsubst
+#
+# Usage:
+#   export S3_MODELS_BUCKET="isaac-lab-prod-models"
+#   envsubst < mlflow-deployment.yaml | kubectl apply -f -
+################################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: mlflow
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: registry
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow
+  template:
+    metadata:
+      labels:
+        app: mlflow
+        app.kubernetes.io/name: mlflow
+        app.kubernetes.io/part-of: isaac-lab
+        app.kubernetes.io/component: registry
+    spec:
+      serviceAccountName: mlflow
+      nodeSelector:
+        node-type: management
+      containers:
+        - name: mlflow
+          image: ghcr.io/mlflow/mlflow:2.19.0
+          command:
+            - mlflow
+            - server
+            - "--backend-store-uri"
+            - "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)"
+            - "--default-artifact-root"
+            - "s3://${S3_MODELS_BUCKET}"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "5000"
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+          env:
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-db-credentials
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-db-credentials
+                  key: password
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-db-credentials
+                  key: host
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-db-credentials
+                  key: port
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-db-credentials
+                  key: database
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          readinessProbe:
+            httpGet:
+              path: /api/2.0/mlflow/experiments/search
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5

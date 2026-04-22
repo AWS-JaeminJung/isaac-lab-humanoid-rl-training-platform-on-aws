@@ -1,0 +1,154 @@
+################################################################################
+# OSMO Controller ConfigMaps
+#
+# Configuration data for the OSMO Controller deployed in the orchestration
+# namespace. Mounted as volumes into the controller pods.
+################################################################################
+
+# ===========================================================================
+# 1. OIDC Configuration - Keycloak integration settings
+# ===========================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osmo-oidc-config
+  namespace: orchestration
+  labels:
+    app.kubernetes.io/name: osmo-controller
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: orchestration
+data:
+  oidc.yaml: |
+    oidc:
+      # Keycloak issuer URL for the isaac-lab-production realm
+      issuer_url: "https://keycloak.isaac-lab.internal/realms/isaac-lab-production"
+      # OIDC client ID registered in Keycloak
+      client_id: "osmo-api"
+      # JWT validation settings
+      jwt:
+        # Expected audience claim
+        audience: "osmo-api"
+        # Algorithm for token verification
+        algorithms:
+          - RS256
+        # JWKS endpoint (auto-discovered from issuer, override if needed)
+        jwks_uri: ""
+        # Clock skew tolerance in seconds
+        clock_skew_seconds: 30
+      # Claims mapping for authorization decisions
+      claims:
+        # Claim containing user roles
+        roles_claim: "realm_access.roles"
+        # Claim containing GPU quota
+        gpu_quota_claim: "gpu_quota"
+        # Claim containing username
+        username_claim: "preferred_username"
+        # Claim containing user groups
+        groups_claim: "groups"
+
+# ===========================================================================
+# 2. GPU Quota Configuration - Role-based GPU allocations
+# ===========================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osmo-gpu-quota-config
+  namespace: orchestration
+  labels:
+    app.kubernetes.io/name: osmo-controller
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: orchestration
+data:
+  gpu-quotas.yaml: |
+    gpu_quotas:
+      # Maximum GPUs per role (enforced by OSMO Controller)
+      roles:
+        admin:
+          max_gpus: 80
+          description: "Full cluster access for administrators"
+          priority: 100
+        engineer:
+          max_gpus: 32
+          description: "Standard allocation for ML engineers"
+          priority: 50
+        researcher:
+          max_gpus: 16
+          description: "Limited allocation for researchers"
+          priority: 25
+      # Default quota for users without explicit role
+      default:
+        max_gpus: 0
+        description: "No GPU access by default"
+        priority: 0
+      # Global cluster limits
+      cluster:
+        total_gpus: 80
+        reservation_timeout_minutes: 30
+
+# ===========================================================================
+# 3. OSMO Settings - Server and workflow configuration
+# ===========================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osmo-settings
+  namespace: orchestration
+  labels:
+    app.kubernetes.io/name: osmo-controller
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: orchestration
+data:
+  settings.yaml: |
+    server:
+      # HTTP server configuration
+      port: 8080
+      read_timeout_seconds: 30
+      write_timeout_seconds: 30
+      idle_timeout_seconds: 120
+      # Graceful shutdown timeout
+      shutdown_timeout_seconds: 15
+      # Maximum request body size (10 MB)
+      max_body_size_bytes: 10485760
+
+    workflow:
+      # Default training workflow settings
+      defaults:
+        # Default namespace for RayJob submission
+        namespace: "training"
+        # Default head node resources
+        head_cpu: "4"
+        head_memory: "8Gi"
+        # Default worker GPU configuration (L40S on g7e.48xlarge)
+        worker_gpus_per_node: 8
+        worker_cpu_per_node: "48"
+        worker_memory_per_node: "384Gi"
+        # Job lifecycle
+        ttl_seconds_after_finished: 3600
+        shutdown_after_job_finishes: true
+        # Active deadline (24 hours max)
+        active_deadline_seconds: 86400
+      # Retry policy for failed jobs
+      retry:
+        max_retries: 2
+        backoff_multiplier: 2
+        initial_delay_seconds: 30
+
+    monitoring:
+      # Prometheus metrics endpoint
+      metrics:
+        enabled: true
+        port: 9090
+        path: "/metrics"
+      # Structured logging
+      logging:
+        level: "info"
+        format: "json"
+        # Include caller information in logs
+        caller: true
+      # Health check endpoints
+      health:
+        liveness_path: "/healthz"
+        readiness_path: "/readyz"

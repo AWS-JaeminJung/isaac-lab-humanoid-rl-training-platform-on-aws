@@ -1,0 +1,156 @@
+################################################################################
+# Stage 3: Multi-Node RayJob - H1 Humanoid Training (2 Nodes, 16 GPUs)
+#
+# Runs a multi-node training job across 2x g7e.48xlarge nodes (16 GPUs total)
+# to validate distributed training with EFA/NCCL:
+#   - Head node on management (no GPU for coordination)
+#   - 2 worker replicas, 8 GPUs each
+#   - NCCL over EFA for high-bandwidth inter-node communication
+#
+# Usage:
+#   export ECR_REPO_URL=123456789012.dkr.ecr.us-east-1.amazonaws.com
+#   envsubst < stage3-rayjob.yaml | kubectl apply -f -
+################################################################################
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: h1-multi-node-validation
+  namespace: training
+  labels:
+    app.kubernetes.io/name: h1-multi-node-validation
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: training
+    isaac-lab/stage: "3"
+    isaac-lab/validation: "true"
+spec:
+  entrypoint: >-
+    python -m torch.distributed.run
+    --nnodes=2
+    --nproc_per_node=8
+    --rdzv_backend=ray
+    /workspace/scripts/train.py
+    --task H1-v0
+    --num_envs 4096
+    --max_iterations 500
+    --headless
+    --device cuda
+
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 300
+
+  rayClusterSpec:
+    rayVersion: "2.42.1"
+
+    # Head node on management (no GPU) - serves as Ray GCS and dashboard
+    headGroupSpec:
+      serviceType: ClusterIP
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-cpus: "4"
+        num-gpus: "0"
+      template:
+        metadata:
+          labels:
+            ray.io/node-type: head
+            isaac-lab/stage: "3"
+        spec:
+          nodeSelector:
+            node-type: management
+          containers:
+            - name: ray-head
+              image: ${ECR_REPO_URL}/isaac-lab-training:v1.0.0
+              ports:
+                - containerPort: 6379
+                  name: gcs-server
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+              env:
+                - name: WORKFLOW_ID
+                  value: "h1-multi-node-validation"
+                - name: CLICKHOUSE_HOST
+                  value: "clickhouse.logging.svc.cluster.local"
+                - name: MLFLOW_TRACKING_URI
+                  value: "http://mlflow.model-registry.svc.cluster.local:5000"
+              resources:
+                requests:
+                  cpu: "4"
+                  memory: "8Gi"
+                limits:
+                  cpu: "8"
+                  memory: "16Gi"
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh", "-c", "ray stop"]
+          restartPolicy: Never
+
+    # 2 GPU worker replicas, each with 8 GPUs
+    workerGroupSpecs:
+      - groupName: gpu-workers
+        replicas: 2
+        minReplicas: 2
+        maxReplicas: 2
+        rayStartParams:
+          num-cpus: "16"
+          num-gpus: "8"
+        template:
+          metadata:
+            labels:
+              ray.io/node-type: worker
+              isaac-lab/stage: "3"
+          spec:
+            nodeSelector:
+              node-type: gpu
+            tolerations:
+              - key: nvidia.com/gpu
+                operator: Exists
+                effect: NoSchedule
+            containers:
+              - name: ray-worker
+                image: ${ECR_REPO_URL}/isaac-lab-training:v1.0.0
+                env:
+                  - name: WORKFLOW_ID
+                    value: "h1-multi-node-validation"
+                  - name: CLICKHOUSE_HOST
+                    value: "clickhouse.logging.svc.cluster.local"
+                  - name: MLFLOW_TRACKING_URI
+                    value: "http://mlflow.model-registry.svc.cluster.local:5000"
+                  - name: NCCL_DEBUG
+                    value: "INFO"
+                  - name: FI_PROVIDER
+                    value: "efa"
+                  - name: FI_EFA_USE_DEVICE_RDMA
+                    value: "1"
+                  - name: NCCL_PROTO
+                    value: "simple"
+                resources:
+                  requests:
+                    cpu: "16"
+                    memory: "64Gi"
+                    nvidia.com/gpu: "8"
+                    vpc.amazonaws.com/efa: "4"
+                  limits:
+                    cpu: "48"
+                    memory: "192Gi"
+                    nvidia.com/gpu: "8"
+                    vpc.amazonaws.com/efa: "4"
+                volumeMounts:
+                  - name: fsx-storage
+                    mountPath: /mnt/fsx
+                  - name: shm
+                    mountPath: /dev/shm
+                lifecycle:
+                  preStop:
+                    exec:
+                      command: ["/bin/sh", "-c", "ray stop"]
+            volumes:
+              - name: fsx-storage
+                persistentVolumeClaim:
+                  claimName: fsx-training
+              - name: shm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: 16Gi
+            restartPolicy: Never

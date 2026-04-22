@@ -1,0 +1,528 @@
+################################################################################
+# GPU Preflight Check Job
+#
+# Validates GPU node health before training workloads run:
+#   - GPU device count and driver status (nvidia-smi)
+#   - EFA network fabric availability (fi_info)
+#   - FSx Lustre mount and cross-node shared access
+#   - NCCL multi-node all-reduce bandwidth (2-node, 16 GPU)
+#   - Checkpoint I/O write/read performance on FSx
+#
+# Usage:
+#   kubectl apply -f gpu-preflight-job.yaml
+#   kubectl wait --for=condition=complete job/gpu-preflight -n training --timeout=600s
+#   kubectl logs -n training job/gpu-preflight --all-containers
+#
+# Cleanup:
+#   kubectl delete job gpu-preflight -n training
+################################################################################
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-preflight-scripts
+  namespace: training
+  labels:
+    app.kubernetes.io/name: gpu-preflight
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: validation
+data:
+  check-gpu.sh: |
+    #!/bin/bash
+    set -e
+    echo "========================================="
+    echo "  GPU Check"
+    echo "========================================="
+
+    if ! command -v nvidia-smi &>/dev/null; then
+      echo "FAIL: nvidia-smi not found"
+      exit 1
+    fi
+
+    nvidia-smi
+    GPU_COUNT=$(nvidia-smi -L | wc -l)
+    EXPECTED_GPUS="${EXPECTED_GPU_COUNT:-8}"
+
+    if [ "$GPU_COUNT" -ne "$EXPECTED_GPUS" ]; then
+      echo "FAIL: Expected ${EXPECTED_GPUS} GPUs, found ${GPU_COUNT}"
+      exit 1
+    fi
+
+    echo "PASS: ${GPU_COUNT} GPUs detected"
+
+    # Check GPU memory errors
+    nvidia-smi --query-gpu=index,name,memory.total,ecc.errors.uncorrected.volatile.total \
+      --format=csv,noheader | while IFS=',' read -r idx name mem ecc; do
+      ecc_trimmed=$(echo "$ecc" | tr -d ' ')
+      if [ "$ecc_trimmed" != "0" ] && [ "$ecc_trimmed" != "[N/A]" ] && [ -n "$ecc_trimmed" ]; then
+        echo "WARNING: GPU ${idx} (${name}) has ${ecc_trimmed} uncorrected ECC errors"
+      fi
+    done
+
+    echo "PASS: GPU check complete"
+
+  check-efa.sh: |
+    #!/bin/bash
+    set -e
+    echo "========================================="
+    echo "  EFA Check"
+    echo "========================================="
+
+    if ! command -v fi_info &>/dev/null; then
+      echo "WARN: fi_info not found, checking device files"
+      if [ -d /sys/class/infiniband ]; then
+        echo "PASS: Infiniband device directory exists"
+        ls -la /sys/class/infiniband/
+      else
+        echo "FAIL: No EFA device found"
+        exit 1
+      fi
+      exit 0
+    fi
+
+    fi_info -p efa 2>&1 || true
+    EFA_COUNT=$(fi_info -p efa 2>/dev/null | grep -c "provider: efa" || echo "0")
+
+    if [ "$EFA_COUNT" -eq 0 ]; then
+      echo "FAIL: No EFA provider found"
+      exit 1
+    fi
+
+    echo "PASS: ${EFA_COUNT} EFA provider(s) available"
+
+  check-fsx.sh: |
+    #!/bin/bash
+    set -e
+    echo "========================================="
+    echo "  FSx Check"
+    echo "========================================="
+
+    FSX_MOUNT="${FSX_MOUNT_PATH:-/mnt/fsx}"
+
+    if ! mountpoint -q "${FSX_MOUNT}" 2>/dev/null; then
+      if [ -d "${FSX_MOUNT}" ] && [ -w "${FSX_MOUNT}" ]; then
+        echo "INFO: ${FSX_MOUNT} is writable directory (CSI mount)"
+      else
+        echo "FAIL: ${FSX_MOUNT} not mounted or not writable"
+        exit 1
+      fi
+    fi
+
+    # Check standard directories exist
+    for dir in checkpoints datasets shared; do
+      if [ ! -d "${FSX_MOUNT}/${dir}" ]; then
+        echo "WARN: ${FSX_MOUNT}/${dir} does not exist, creating"
+        mkdir -p "${FSX_MOUNT}/${dir}" || true
+      fi
+    done
+
+    # Write test
+    TEST_FILE="${FSX_MOUNT}/shared/.preflight-$(hostname)-$(date +%s)"
+    echo "preflight-check" > "${TEST_FILE}"
+    if [ -f "${TEST_FILE}" ]; then
+      echo "PASS: FSx write succeeded"
+      rm -f "${TEST_FILE}"
+    else
+      echo "FAIL: FSx write failed"
+      exit 1
+    fi
+
+    # Sequential write bandwidth (256 MB)
+    echo "Testing FSx write bandwidth (256 MB)..."
+    WRITE_START=$(date +%s%N)
+    dd if=/dev/zero of="${FSX_MOUNT}/shared/.preflight-bw-$(hostname)" \
+      bs=1M count=256 oflag=direct 2>/dev/null
+    WRITE_END=$(date +%s%N)
+    WRITE_MS=$(( (WRITE_END - WRITE_START) / 1000000 ))
+    WRITE_MBPS=$(( 256 * 1000 / WRITE_MS ))
+    rm -f "${FSX_MOUNT}/shared/.preflight-bw-$(hostname)"
+    echo "PASS: FSx write bandwidth ~${WRITE_MBPS} MB/s (${WRITE_MS}ms for 256 MB)"
+
+  check-nccl.sh: |
+    #!/bin/bash
+    set -e
+    echo "========================================="
+    echo "  NCCL All-Reduce Check"
+    echo "========================================="
+
+    NCCL_TEST_BIN="${NCCL_TEST_PATH:-/opt/nccl-tests/build/all_reduce_perf}"
+
+    if [ ! -f "${NCCL_TEST_BIN}" ]; then
+      echo "WARN: nccl-tests binary not found at ${NCCL_TEST_BIN}"
+      echo "Falling back to PyTorch NCCL check..."
+
+      python3 -c "
+    import os, torch, torch.distributed as dist
+
+    dist.init_process_group(backend='nccl')
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    local_rank = int(os.environ.get('LOCAL_RANK', rank % 8))
+    device = torch.device(f'cuda:{local_rank}')
+
+    # Basic all-reduce
+    tensor = torch.ones(1024, 1024, device=device)
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    expected = float(world_size)
+    actual = tensor[0][0].item()
+    assert abs(actual - expected) < 1e-5, \
+        f'NCCL all-reduce FAIL: got {actual}, expected {expected}'
+    print(f'[Rank {rank}] all-reduce OK: {actual} == {expected}')
+
+    # Bandwidth measurement (rank 0 reports)
+    if rank == 0:
+        size_mb = 256
+        data = torch.randn(size_mb * 256 * 1024, device=device)
+        # warmup
+        dist.all_reduce(data)
+        torch.cuda.synchronize()
+
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for _ in range(5):
+            dist.all_reduce(data)
+        end.record()
+        torch.cuda.synchronize()
+        elapsed_ms = start.elapsed_time(end) / 5
+        bandwidth_gbps = (size_mb * 1024 * 1024 * 8) / (elapsed_ms / 1000) / 1e9
+        print(f'NCCL all-reduce bandwidth: {bandwidth_gbps:.1f} Gbps')
+        if bandwidth_gbps < 50:
+            print(f'WARNING: Low bandwidth ({bandwidth_gbps:.1f} Gbps), check EFA')
+
+    dist.barrier()
+    dist.destroy_process_group()
+    print(f'[Rank {rank}] PASS: NCCL check complete')
+    "
+      exit $?
+    fi
+
+    # nccl-tests binary available
+    export NCCL_DEBUG=WARN
+    export FI_PROVIDER=efa
+    export FI_EFA_USE_DEVICE_RDMA=1
+
+    ${NCCL_TEST_BIN} -b 8 -e 512M -f 2 -g 1
+
+    echo "PASS: NCCL all-reduce check complete"
+
+  check-checkpoint-io.sh: |
+    #!/bin/bash
+    set -e
+    echo "========================================="
+    echo "  Checkpoint I/O Check"
+    echo "========================================="
+
+    python3 -c "
+    import os, time, torch
+
+    fsx_path = os.environ.get('FSX_MOUNT_PATH', '/mnt/fsx')
+    ckpt_path = f'{fsx_path}/checkpoints'
+    os.makedirs(ckpt_path, exist_ok=True)
+
+    hostname = os.environ.get('HOSTNAME', 'unknown')
+    test_file = f'{ckpt_path}/.preflight-ckpt-{hostname}.pt'
+
+    # Create a realistic model state dict (~200 MB)
+    state = {
+        'model': {f'layer_{i}': torch.randn(2048, 2048) for i in range(12)},
+        'optimizer': {f'state_{i}': torch.randn(2048, 2048) for i in range(12)},
+        'step': 1000,
+    }
+
+    # Write test
+    start = time.time()
+    torch.save(state, test_file)
+    write_time = time.time() - start
+    file_size_mb = os.path.getsize(test_file) / (1024 * 1024)
+
+    # Read test
+    start = time.time()
+    loaded = torch.load(test_file, weights_only=False)
+    read_time = time.time() - start
+
+    os.remove(test_file)
+
+    write_mbps = file_size_mb / write_time
+    read_mbps = file_size_mb / read_time
+
+    print(f'Checkpoint size: {file_size_mb:.0f} MB')
+    print(f'Write: {write_time:.2f}s ({write_mbps:.0f} MB/s)')
+    print(f'Read:  {read_time:.2f}s ({read_mbps:.0f} MB/s)')
+
+    if write_time > 30:
+        print(f'WARNING: Checkpoint write took {write_time:.1f}s (>30s)')
+    if read_time > 30:
+        print(f'WARNING: Checkpoint read took {read_time:.1f}s (>30s)')
+
+    print('PASS: Checkpoint I/O check complete')
+    "
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gpu-preflight
+  namespace: training
+  labels:
+    app.kubernetes.io/name: gpu-preflight
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: validation
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  completions: 2
+  parallelism: 2
+  completionMode: Indexed
+  template:
+    metadata:
+      labels:
+        app: gpu-preflight
+    spec:
+      restartPolicy: Never
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      nodeSelector:
+        gpu-tier: baseline
+      containers:
+        - name: preflight
+          image: ACCOUNT.dkr.ecr.REGION.amazonaws.com/isaac-lab-training:latest
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              echo "============================================"
+              echo "  GPU Preflight Check - $(hostname)"
+              echo "  Node: $(cat /etc/hostname 2>/dev/null || hostname)"
+              echo "  Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              echo "============================================"
+
+              cd /scripts
+
+              bash check-gpu.sh
+              echo ""
+              bash check-efa.sh
+              echo ""
+              bash check-fsx.sh
+              echo ""
+              bash check-checkpoint-io.sh
+              echo ""
+
+              echo "============================================"
+              echo "  All single-node checks PASSED"
+              echo "============================================"
+          env:
+            - name: EXPECTED_GPU_COUNT
+              value: "8"
+            - name: FSX_MOUNT_PATH
+              value: "/mnt/fsx"
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+          resources:
+            requests:
+              nvidia.com/gpu: "8"
+              cpu: "4"
+              memory: 16Gi
+            limits:
+              nvidia.com/gpu: "8"
+              cpu: "8"
+              memory: 32Gi
+          volumeMounts:
+            - name: fsx
+              mountPath: /mnt/fsx
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: fsx-training-pvc
+        - name: scripts
+          configMap:
+            name: gpu-preflight-scripts
+            defaultMode: 0755
+
+---
+################################################################################
+# NCCL Multi-Node Preflight Job
+#
+# Runs AFTER the per-node Job completes. Tests cross-node NCCL communication
+# using PyTorchJob (requires Kubeflow Training Operator) or a simple
+# 2-pod Job with torch.distributed.
+#
+# This Job uses completionMode: Indexed with 2 pods to test 2-node
+# all-reduce over EFA.
+################################################################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gpu-preflight-nccl
+  namespace: training
+  labels:
+    app.kubernetes.io/name: gpu-preflight-nccl
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: validation
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  completions: 2
+  parallelism: 2
+  completionMode: Indexed
+  template:
+    metadata:
+      labels:
+        app: gpu-preflight-nccl
+    spec:
+      restartPolicy: Never
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      nodeSelector:
+        gpu-tier: baseline
+      subdomain: preflight-nccl
+      setHostnameAsFQDN: false
+      containers:
+        - name: nccl-check
+          image: ACCOUNT.dkr.ecr.REGION.amazonaws.com/isaac-lab-training:latest
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              echo "============================================"
+              echo "  NCCL Multi-Node Preflight"
+              echo "  Pod Index: ${JOB_COMPLETION_INDEX}"
+              echo "  Hostname: $(hostname)"
+              echo "============================================"
+
+              # Resolve all peer addresses
+              MASTER_ADDR="gpu-preflight-nccl-0.preflight-nccl.training.svc.cluster.local"
+              MASTER_PORT=29500
+              WORLD_SIZE=16
+              NODE_RANK=${JOB_COMPLETION_INDEX}
+              LOCAL_WORLD_SIZE=8
+
+              export MASTER_ADDR MASTER_PORT WORLD_SIZE
+              export NCCL_DEBUG=INFO
+              export FI_PROVIDER=efa
+              export FI_EFA_USE_DEVICE_RDMA=1
+              export NCCL_ALGO=Ring
+
+              echo "MASTER_ADDR=${MASTER_ADDR}"
+              echo "NODE_RANK=${NODE_RANK}"
+              echo "WORLD_SIZE=${WORLD_SIZE}"
+
+              # Wait for master to be resolvable
+              echo "Waiting for master node..."
+              for i in $(seq 1 60); do
+                if getent hosts "${MASTER_ADDR}" > /dev/null 2>&1; then
+                  echo "Master resolved after ${i}s"
+                  break
+                fi
+                sleep 1
+              done
+
+              # Launch with torchrun (one per node, 8 GPUs each)
+              torchrun \
+                --nnodes=2 \
+                --nproc_per_node=8 \
+                --node_rank=${NODE_RANK} \
+                --master_addr=${MASTER_ADDR} \
+                --master_port=${MASTER_PORT} \
+                -c "
+              import os, torch, torch.distributed as dist
+
+              dist.init_process_group(backend='nccl')
+              rank = dist.get_rank()
+              world_size = dist.get_world_size()
+              local_rank = int(os.environ.get('LOCAL_RANK', 0))
+              device = torch.device(f'cuda:{local_rank}')
+
+              # 1. Correctness check
+              tensor = torch.ones(1024, 1024, device=device)
+              dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+              expected = float(world_size)
+              actual = tensor[0][0].item()
+              assert abs(actual - expected) < 1e-5, \
+                  f'FAIL: all-reduce got {actual}, expected {expected}'
+
+              # 2. Bandwidth measurement
+              if rank == 0:
+                  size_mb = 256
+                  data = torch.randn(size_mb * 256 * 1024, device=device)
+                  dist.all_reduce(data)
+                  torch.cuda.synchronize()
+
+                  start = torch.cuda.Event(enable_timing=True)
+                  end = torch.cuda.Event(enable_timing=True)
+                  start.record()
+                  for _ in range(10):
+                      dist.all_reduce(data)
+                  end.record()
+                  torch.cuda.synchronize()
+                  elapsed_ms = start.elapsed_time(end) / 10
+                  bw_gbps = (size_mb * 1024 * 1024 * 8) / (elapsed_ms / 1000) / 1e9
+                  print(f'Cross-node all-reduce bandwidth: {bw_gbps:.1f} Gbps')
+                  if bw_gbps < 50:
+                      print(f'WARNING: bandwidth {bw_gbps:.1f} Gbps below 50 Gbps threshold')
+
+              # 3. FSx cross-node check
+              fsx_path = '/mnt/fsx/shared'
+              marker = f'{fsx_path}/.nccl-preflight-rank-{rank}'
+              with open(marker, 'w') as f:
+                  f.write(f'rank-{rank}-ok')
+              dist.barrier()
+              if rank == 0:
+                  for r in range(world_size):
+                      path = f'{fsx_path}/.nccl-preflight-rank-{r}'
+                      assert os.path.exists(path), f'FAIL: rank {r} FSx marker missing'
+                      os.remove(path)
+                  print(f'PASS: All {world_size} ranks wrote to shared FSx')
+
+              dist.barrier()
+              dist.destroy_process_group()
+              if rank == 0:
+                  print('============================================')
+                  print('  NCCL multi-node preflight PASSED')
+                  print('============================================')
+              "
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+          resources:
+            requests:
+              nvidia.com/gpu: "8"
+              cpu: "4"
+              memory: 16Gi
+            limits:
+              nvidia.com/gpu: "8"
+              cpu: "8"
+              memory: 32Gi
+          ports:
+            - containerPort: 29500
+              name: master
+          volumeMounts:
+            - name: fsx
+              mountPath: /mnt/fsx
+      volumes:
+        - name: fsx
+          persistentVolumeClaim:
+            claimName: fsx-training-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: preflight-nccl
+  namespace: training
+  labels:
+    app.kubernetes.io/name: gpu-preflight-nccl
+    app.kubernetes.io/part-of: isaac-lab
+spec:
+  clusterIP: None
+  selector:
+    app: gpu-preflight-nccl
+  ports:
+    - port: 29500
+      name: master

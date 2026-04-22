@@ -1,0 +1,222 @@
+################################################################################
+# OSMO Controller Helm Values
+#
+# The OSMO Controller is the central orchestration service for Isaac Lab.
+# It receives training requests via API, validates JWT tokens (GPU quota),
+# and creates RayJob CRDs for KubeRay to execute.
+#
+# Chart: nvidia-osmo/osmo-controller
+# Repo:  https://helm.ngc.nvidia.com/nvidia/osmo
+# Version: 1.2.0
+################################################################################
+
+# ---------------------------------------------------------------------------
+# Container Image
+# ---------------------------------------------------------------------------
+
+image:
+  repository: nvcr.io/nvidia/osmo/osmo-controller
+  tag: "1.2.0"
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------
+# Replica Count and Scheduling
+# ---------------------------------------------------------------------------
+
+replicaCount: 2
+
+nodeSelector:
+  node-type: management
+
+tolerations: []
+
+affinity: {}
+
+# ---------------------------------------------------------------------------
+# Resource Requests and Limits
+# ---------------------------------------------------------------------------
+
+resources:
+  requests:
+    cpu: "1"
+    memory: 2Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+# ---------------------------------------------------------------------------
+# Service Configuration
+# ---------------------------------------------------------------------------
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# ---------------------------------------------------------------------------
+# Environment Variables
+# ---------------------------------------------------------------------------
+# Database and OIDC credentials are sourced from ExternalSecrets.
+# Values marked with valueFrom are populated from Kubernetes Secrets.
+
+env:
+  # Database configuration
+  - name: OSMO_DB_HOST
+    valueFrom:
+      secretKeyRef:
+        name: osmo-db-credentials
+        key: host
+  - name: OSMO_DB_PORT
+    valueFrom:
+      secretKeyRef:
+        name: osmo-db-credentials
+        key: port
+  - name: OSMO_DB_NAME
+    valueFrom:
+      secretKeyRef:
+        name: osmo-db-credentials
+        key: database
+  - name: OSMO_DB_USERNAME
+    valueFrom:
+      secretKeyRef:
+        name: osmo-db-credentials
+        key: username
+  - name: OSMO_DB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: osmo-db-credentials
+        key: password
+
+  # Logging
+  - name: OSMO_LOG_LEVEL
+    value: "info"
+  - name: OSMO_LOG_FORMAT
+    value: "json"
+
+  # KubeRay settings
+  - name: OSMO_RAY_NAMESPACE
+    value: "training"
+  - name: OSMO_RAY_DEFAULT_IMAGE
+    value: ""  # Set via --set during deploy
+
+  # OIDC configuration
+  - name: OSMO_OIDC_ISSUER_URL
+    value: ""  # Set via --set during deploy
+  - name: OSMO_OIDC_CLIENT_ID
+    valueFrom:
+      secretKeyRef:
+        name: osmo-oidc-credentials
+        key: client-id
+  - name: OSMO_OIDC_CLIENT_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: osmo-oidc-credentials
+        key: client-secret
+
+# ---------------------------------------------------------------------------
+# ServiceAccount with IRSA
+# ---------------------------------------------------------------------------
+
+serviceAccount:
+  create: true
+  name: osmo-controller-sa
+  annotations:
+    # IRSA role ARN is set via --set during deploy
+    # eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT:role/osmo-controller-role"
+    {}
+
+# ---------------------------------------------------------------------------
+# Health Probes
+# ---------------------------------------------------------------------------
+
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 12
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# Volume Mounts for ConfigMaps
+# ---------------------------------------------------------------------------
+
+volumeMounts:
+  - name: oidc-config
+    mountPath: /etc/osmo/oidc
+    readOnly: true
+  - name: gpu-quota-config
+    mountPath: /etc/osmo/quota
+    readOnly: true
+  - name: settings
+    mountPath: /etc/osmo/settings
+    readOnly: true
+
+volumes:
+  - name: oidc-config
+    configMap:
+      name: osmo-oidc-config
+  - name: gpu-quota-config
+    configMap:
+      name: osmo-gpu-quota-config
+  - name: settings
+    configMap:
+      name: osmo-settings
+
+# ---------------------------------------------------------------------------
+# Pod Disruption Budget
+# ---------------------------------------------------------------------------
+
+podDisruptionBudget:
+  minAvailable: 1
+
+# ---------------------------------------------------------------------------
+# Application Configuration (passed as config/env)
+# ---------------------------------------------------------------------------
+
+config:
+  # Keycloak OIDC configuration for JWT validation
+  oidc:
+    issuerUrl: ""       # Set via --set: https://keycloak.isaac-lab.internal/realms/isaac-lab-production
+    clientId: "osmo-api"
+    audience: "osmo-api"
+
+  # KubeRay settings
+  ray:
+    namespace: "training"
+    defaultImage: ""    # Set via --set: <ECR_URI>/isaac-lab-training:latest
+    headCpu: "4"
+    headMemory: "8Gi"
+    workerGpus: 8       # L40S GPUs per g7e.48xlarge
+
+  # FSx mount for shared storage
+  storage:
+    mountPath: "/mnt/fsx"
+    pvcName: "fsx-claim"
+
+  # S3 buckets
+  s3:
+    checkpointBucket: ""  # Set via --set
+    artifactBucket: ""    # Set via --set
+
+  # GPU quota enforcement
+  quota:
+    enabled: true
+    claimKey: "gpu_quota"  # JWT claim key for GPU quota

@@ -1,0 +1,57 @@
+################################################################################
+# NVIDIA Device Plugin DaemonSet - On-Prem Hybrid GPU Nodes
+#
+# Runs the NVIDIA device plugin on nodes labeled node-type=onprem-gpu,
+# exposing nvidia.com/gpu resources to the Kubernetes scheduler.
+#
+# Tolerates the onprem-single-gpu taint so it can schedule on hybrid nodes.
+################################################################################
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-onprem
+  namespace: kube-system
+  labels:
+    app: nvidia-device-plugin-onprem
+    phase: "03-bridge"
+spec:
+  selector:
+    matchLabels:
+      app: nvidia-device-plugin-onprem
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: nvidia-device-plugin-onprem
+    spec:
+      priorityClassName: system-node-critical
+      nodeSelector:
+        node-type: onprem-gpu
+      tolerations:
+        - key: workload-type
+          value: onprem-single-gpu
+          effect: NoSchedule
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: nvidia-device-plugin
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.16.2
+          env:
+            - name: FAIL_ON_INIT_ERROR
+              value: "false"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins

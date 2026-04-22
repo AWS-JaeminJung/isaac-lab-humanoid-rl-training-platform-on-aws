@@ -1,0 +1,175 @@
+{
+  "uid": "isaac-lab-hpo",
+  "title": "HPO Analysis",
+  "description": "Hyperparameter optimization analysis: trial comparisons, hyperparameter correlations, and trial progress tracking from ClickHouse.",
+  "tags": ["isaac-lab", "hpo", "hyperparameter"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "workflow_id",
+        "label": "Workflow ID",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "clickhouse"
+        },
+        "query": "SELECT DISTINCT workflow_id FROM isaac_lab.hpo_trials ORDER BY workflow_id DESC",
+        "refresh": 2,
+        "sort": 2,
+        "includeAll": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Trial Comparison (Best Reward by Trial)",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT trial_id, max(best_reward) AS best_reward FROM isaac_lab.hpo_trials WHERE workflow_id = '${workflow_id}' GROUP BY trial_id ORDER BY best_reward DESC",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "fillOpacity": 80,
+            "gradientMode": "scheme"
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "trial_id" },
+            "properties": [{ "id": "custom.axisLabel", "value": "Trial" }]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" },
+        "tooltip": { "mode": "single" }
+      }
+    },
+    {
+      "id": 2,
+      "title": "HP Correlation Scatter",
+      "type": "state-timeline",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT trial_id, learning_rate, best_reward, batch_size, gamma FROM isaac_lab.hpo_trials WHERE workflow_id = '${workflow_id}' ORDER BY best_reward DESC",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-blues" },
+          "unit": "none"
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "description": "Hyperparameter values across trials, sorted by best reward. Use Table view for detailed comparison."
+    },
+    {
+      "id": 3,
+      "title": "Trial Progress",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 10 },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp, trial_id, mean_reward FROM isaac_lab.training_metrics WHERE workflow_id = '${workflow_id}' ORDER BY timestamp",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          },
+          "color": { "mode": "palette-classic" },
+          "unit": "none"
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["last", "max"] },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 4,
+      "title": "HPO Trial Details",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT trial_id, status, best_reward, learning_rate, batch_size, gamma, num_envs, created_at, completed_at FROM isaac_lab.hpo_trials WHERE workflow_id = '${workflow_id}' ORDER BY best_reward DESC",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "best_reward" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "continuous-GrYlRd" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "status" },
+            "properties": [
+              { "id": "mappings", "value": [
+                { "type": "value", "options": { "COMPLETED": { "text": "Completed", "color": "green" }, "RUNNING": { "text": "Running", "color": "blue" }, "FAILED": { "text": "Failed", "color": "red" } } }
+              ] }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "best_reward", "desc": true }]
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

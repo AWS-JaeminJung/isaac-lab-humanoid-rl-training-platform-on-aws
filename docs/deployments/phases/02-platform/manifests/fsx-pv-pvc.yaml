@@ -1,0 +1,56 @@
+################################################################################
+# FSx for Lustre - PersistentVolume & PersistentVolumeClaim
+#
+# Static provisioning for the FSx for Lustre filesystem. The volumeHandle
+# and mountName must be replaced with actual values from terraform output.
+#
+# Usage:
+#   - Replace FSX_FILESYSTEM_ID with: terraform output -raw fsx_filesystem_id
+#   - Replace FSX_MOUNT_NAME with: terraform output -raw fsx_mount_name
+################################################################################
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: fsx-training-pv
+  labels:
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: isaac-lab
+spec:
+  capacity:
+    storage: 1200Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  csi:
+    driver: fsx.csi.aws.com
+    volumeHandle: FSX_FILESYSTEM_ID
+    volumeAttributes:
+      dnsname: FSX_FILESYSTEM_ID.fsx.us-east-1.amazonaws.com
+      mountname: FSX_MOUNT_NAME
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: training
+  labels:
+    app.kubernetes.io/part-of: isaac-lab
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fsx-training-pvc
+  namespace: training
+  labels:
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: isaac-lab
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 1200Gi
+  volumeName: fsx-training-pv

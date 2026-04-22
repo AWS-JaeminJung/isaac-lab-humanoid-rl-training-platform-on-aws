@@ -1,0 +1,141 @@
+################################################################################
+# Fluent Bit ConfigMap
+#
+# Configuration for the Fluent Bit DaemonSet:
+#   - Tails training pod logs from /var/log/containers/*training*.log
+#   - Enriches with Kubernetes metadata (pod name, namespace, labels)
+#   - Outputs to ClickHouse HTTP API for structured log ingestion
+################################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: recorder
+    app.kubernetes.io/managed-by: kubectl
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         5
+        Daemon        Off
+        Log_Level     info
+        Parsers_File  parsers.conf
+        HTTP_Server   On
+        HTTP_Listen   0.0.0.0
+        HTTP_Port     2020
+
+    [INPUT]
+        Name              tail
+        Tag               training.*
+        Path              /var/log/containers/*training*.log
+        Parser            docker
+        DB                /var/log/flb_training.db
+        Mem_Buf_Limit     5MB
+        Skip_Long_Lines   On
+        Refresh_Interval  10
+
+    [FILTER]
+        Name                kubernetes
+        Match               training.*
+        Kube_URL            https://kubernetes.default.svc:443
+        Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
+        Kube_Tag_Prefix     training.var.log.containers.
+        Merge_Log           On
+        Keep_Log            Off
+        K8S-Logging.Parser  On
+        K8S-Logging.Exclude On
+
+    [OUTPUT]
+        Name              http
+        Match             training.*
+        Host              clickhouse.logging.svc.cluster.local
+        Port              8123
+        URI               /?query=INSERT+INTO+training_raw_logs+FORMAT+JSONEachRow
+        Format            json_lines
+        Json_Date_Key     timestamp
+        Json_Date_Format  iso8601
+        Header            Content-Type application/json
+        Retry_Limit       5
+
+    # --- Tier 1 Platform Logs (OSMO, KubeRay, Karpenter) ---
+
+    [INPUT]
+        Name              tail
+        Tag               platform.*
+        Path              /var/log/containers/*osmo*.log,/var/log/containers/*kuberay*.log,/var/log/containers/*karpenter*.log
+        Parser            docker
+        DB                /var/log/flb_platform.db
+        Mem_Buf_Limit     5MB
+        Skip_Long_Lines   On
+        Refresh_Interval  10
+
+    [FILTER]
+        Name                kubernetes
+        Match               platform.*
+        Kube_URL            https://kubernetes.default.svc:443
+        Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
+        Kube_Tag_Prefix     platform.var.log.containers.
+        Merge_Log           On
+        Keep_Log            Off
+        K8S-Logging.Parser  On
+        K8S-Logging.Exclude On
+
+    [OUTPUT]
+        Name              http
+        Match             platform.*
+        Host              clickhouse.logging.svc.cluster.local
+        Port              8123
+        URI               /?query=INSERT+INTO+platform_logs+FORMAT+JSONEachRow
+        Format            json_lines
+        Json_Date_Key     timestamp
+        Json_Date_Format  iso8601
+        Header            Content-Type application/json
+        Retry_Limit       5
+
+    # --- Node System Logs (GPU nodes: Xid, EFA, OOM, kubelet) ---
+
+    [INPUT]
+        Name              systemd
+        Tag               node.*
+        Path              /run/log/journal
+        Read_From_Tail    On
+        Systemd_Filter    _SYSTEMD_UNIT=kubelet.service
+        Systemd_Filter    _SYSTEMD_UNIT=containerd.service
+        Systemd_Filter    SYSLOG_IDENTIFIER=kernel
+
+    [FILTER]
+        Name              grep
+        Match             node.*
+        Regex             MESSAGE (Xid|xid|EFA|efa|nccl|NCCL|oom|OOM|Out of memory|killed process|error|Error|fatal|Fatal|GPU fell off|fallen off)
+
+    [OUTPUT]
+        Name              http
+        Match             node.*
+        Host              clickhouse.logging.svc.cluster.local
+        Port              8123
+        URI               /?query=INSERT+INTO+node_logs+FORMAT+JSONEachRow
+        Format            json_lines
+        Json_Date_Key     timestamp
+        Json_Date_Format  iso8601
+        Header            Content-Type application/json
+        Retry_Limit       5
+
+  parsers.conf: |
+    [PARSER]
+        Name        docker
+        Format      json
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L
+        Time_Keep   On
+
+    [PARSER]
+        Name        syslog
+        Format      regex
+        Regex       ^\<(?<pri>[0-9]+)\>(?<time>[^ ]* {1,2}[^ ]* [^ ]*) (?<host>[^ ]*) (?<ident>[a-zA-Z0-9_\/\.\-]*)(?:\[(?<pid>[0-9]+)\])?(?:[^\:]*\:)? *(?<message>.*)$
+        Time_Key    time
+        Time_Format %b %d %H:%M:%S

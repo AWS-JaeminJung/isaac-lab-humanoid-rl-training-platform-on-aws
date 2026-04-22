@@ -1,0 +1,71 @@
+################################################################################
+# CPU-only RayJob for Pipeline Verification
+#
+# A minimal RayJob that validates the OSMO + KubeRay pipeline is working
+# end-to-end without requiring GPU nodes. The job runs a simple Ray script
+# on management nodes and auto-cleans up after completion.
+#
+# Usage:
+#   kubectl apply -f cpu-test-rayjob.yaml
+#   kubectl get rayjob cpu-pipeline-test -n training -w
+################################################################################
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: cpu-pipeline-test
+  namespace: training
+  labels:
+    app.kubernetes.io/name: cpu-pipeline-test
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: training
+    isaac-lab/test-type: cpu-verification
+spec:
+  # Simple Python script to verify Ray cluster connectivity
+  entrypoint: "python -c \"import ray; ray.init(); print('Pipeline test passed'); ray.shutdown()\""
+
+  # Automatically shut down the Ray cluster after job completion
+  shutdownAfterJobFinishes: true
+
+  # Clean up resources 5 minutes after job finishes
+  ttlSecondsAfterFinished: 300
+
+  # Ray cluster specification (CPU-only, no GPU)
+  rayClusterSpec:
+    rayVersion: "2.9.0"
+
+    # Head node on management nodes (no GPU required)
+    headGroupSpec:
+      serviceType: ClusterIP
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-cpus: "1"
+      template:
+        metadata:
+          labels:
+            ray.io/node-type: head
+            isaac-lab/test-type: cpu-verification
+        spec:
+          nodeSelector:
+            node-type: management
+          containers:
+            - name: ray-head
+              image: rayproject/ray:2.9.0
+              ports:
+                - containerPort: 6379
+                  name: gcs-server
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "1Gi"
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh", "-c", "ray stop"]
+          restartPolicy: Never

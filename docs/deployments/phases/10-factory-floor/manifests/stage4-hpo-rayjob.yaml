@@ -1,0 +1,145 @@
+################################################################################
+# Stage 4: HPO RayJob - Hyperparameter Optimization with ASHA Scheduler
+#
+# Runs a Ray Tune HPO sweep using the ASHA (Async Successive Halving) scheduler
+# to find optimal hyperparameters for H1-v0 training:
+#   - 12 trials, 4 concurrent, 8 GPUs per trial
+#   - Search space: learning_rate, gamma, clip_param
+#   - Head node on management (no GPU)
+#   - Workers scale up to 4 replicas (32 GPUs max)
+#
+# Usage:
+#   export ECR_REPO_URL=123456789012.dkr.ecr.us-east-1.amazonaws.com
+#   envsubst < stage4-hpo-rayjob.yaml | kubectl apply -f -
+################################################################################
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: h1-hpo-validation
+  namespace: training
+  labels:
+    app.kubernetes.io/name: h1-hpo-validation
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: training
+    isaac-lab/stage: "4"
+    isaac-lab/validation: "true"
+spec:
+  entrypoint: >-
+    python /workspace/scripts/hpo.py
+    --task H1-v0
+    --num_envs 4096
+    --num_trials 12
+    --max_concurrent 4
+    --gpus_per_trial 8
+
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600
+
+  rayClusterSpec:
+    rayVersion: "2.42.1"
+
+    # Head node on management (no GPU) - serves as Ray driver and Tune controller
+    headGroupSpec:
+      serviceType: ClusterIP
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-cpus: "8"
+        num-gpus: "0"
+      template:
+        metadata:
+          labels:
+            ray.io/node-type: head
+            isaac-lab/stage: "4"
+        spec:
+          nodeSelector:
+            node-type: management
+          containers:
+            - name: ray-head
+              image: ${ECR_REPO_URL}/isaac-lab-training:v1.0.0
+              ports:
+                - containerPort: 6379
+                  name: gcs-server
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+              env:
+                - name: WORKFLOW_ID
+                  value: "h1-hpo-validation"
+                - name: CLICKHOUSE_HOST
+                  value: "clickhouse.logging.svc.cluster.local"
+                - name: MLFLOW_TRACKING_URI
+                  value: "http://mlflow.model-registry.svc.cluster.local:5000"
+              resources:
+                requests:
+                  cpu: "8"
+                  memory: "16Gi"
+                limits:
+                  cpu: "16"
+                  memory: "32Gi"
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh", "-c", "ray stop"]
+          restartPolicy: Never
+
+    # GPU workers - scale from 1 to 4 replicas (8 to 32 GPUs)
+    workerGroupSpecs:
+      - groupName: gpu-workers
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 4
+        rayStartParams:
+          num-cpus: "16"
+          num-gpus: "8"
+        template:
+          metadata:
+            labels:
+              ray.io/node-type: worker
+              isaac-lab/stage: "4"
+          spec:
+            nodeSelector:
+              node-type: gpu
+            tolerations:
+              - key: nvidia.com/gpu
+                operator: Exists
+                effect: NoSchedule
+            containers:
+              - name: ray-worker
+                image: ${ECR_REPO_URL}/isaac-lab-training:v1.0.0
+                env:
+                  - name: WORKFLOW_ID
+                    value: "h1-hpo-validation"
+                  - name: CLICKHOUSE_HOST
+                    value: "clickhouse.logging.svc.cluster.local"
+                  - name: MLFLOW_TRACKING_URI
+                    value: "http://mlflow.model-registry.svc.cluster.local:5000"
+                  - name: NCCL_DEBUG
+                    value: "WARN"
+                resources:
+                  requests:
+                    cpu: "16"
+                    memory: "64Gi"
+                    nvidia.com/gpu: "8"
+                  limits:
+                    cpu: "48"
+                    memory: "192Gi"
+                    nvidia.com/gpu: "8"
+                volumeMounts:
+                  - name: fsx-storage
+                    mountPath: /mnt/fsx
+                  - name: shm
+                    mountPath: /dev/shm
+                lifecycle:
+                  preStop:
+                    exec:
+                      command: ["/bin/sh", "-c", "ray stop"]
+            volumes:
+              - name: fsx-storage
+                persistentVolumeClaim:
+                  claimName: fsx-training
+              - name: shm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: 16Gi
+            restartPolicy: Never

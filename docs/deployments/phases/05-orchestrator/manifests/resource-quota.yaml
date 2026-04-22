@@ -1,0 +1,21 @@
+################################################################################
+# ResourceQuota - Training Namespace GPU Limits
+#
+# Enforces a maximum of 80 GPUs (requests + limits) across all pods in the
+# training namespace. This is also managed by Terraform but applied here as
+# a manifest for visibility and GitOps reconciliation.
+################################################################################
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: training-gpu-quota
+  namespace: training
+  labels:
+    app.kubernetes.io/name: training-gpu-quota
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: training
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  hard:
+    requests.nvidia.com/gpu: "80"
+    limits.nvidia.com/gpu: "80"

@@ -1,0 +1,41 @@
+################################################################################
+# On-Prem GPU Test Job
+#
+# Runs nvidia-smi on an on-prem hybrid GPU node to verify that:
+#   1. The node is schedulable
+#   2. The nvidia.com/gpu resource is available
+#   3. The GPU driver is functional
+#
+# Used by validate.sh to confirm end-to-end GPU availability.
+################################################################################
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: onprem-gpu-test
+  namespace: default
+  labels:
+    app: onprem-gpu-test
+    phase: "03-bridge"
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: onprem-gpu-test
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node-type: onprem-gpu
+      tolerations:
+        - key: workload-type
+          value: onprem-single-gpu
+          effect: NoSchedule
+      containers:
+        - name: gpu-test
+          image: nvidia/cuda:12.4.0-base-ubuntu22.04
+          command:
+            - nvidia-smi
+          resources:
+            limits:
+              nvidia.com/gpu: 1

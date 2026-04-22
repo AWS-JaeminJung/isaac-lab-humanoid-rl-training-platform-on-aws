@@ -1,0 +1,92 @@
+################################################################################
+# DCGM Exporter DaemonSet
+#
+# Deploys NVIDIA DCGM Exporter on all GPU nodes to expose GPU metrics
+# (temperature, utilization, memory, power) to Prometheus.
+#
+# Scheduling:
+#   - nodeSelector: node-type=gpu (only GPU worker nodes)
+#   - tolerations: nvidia.com/gpu NoSchedule (GPU taint)
+#
+# Metrics endpoint: :9400/metrics (Prometheus scrape annotations)
+################################################################################
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels:
+    app: dcgm-exporter
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: control-room
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  selector:
+    matchLabels:
+      app: dcgm-exporter
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: dcgm-exporter
+        app.kubernetes.io/part-of: isaac-lab
+        app.kubernetes.io/component: control-room
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9400"
+        prometheus.io/path: "/metrics"
+    spec:
+      nodeSelector:
+        node-type: gpu
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: dcgm-exporter
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.8-3.6.0-ubuntu22.04
+          ports:
+            - name: metrics
+              containerPort: 9400
+              protocol: TCP
+          env:
+            - name: DCGM_EXPORTER_KUBERNETES
+              value: "true"
+            - name: DCGM_EXPORTER_LISTEN
+              value: ":9400"
+          securityContext:
+            runAsUser: 0
+            privileged: false
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: dev
+              mountPath: /dev
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+      volumes:
+        - name: dev
+          hostPath:
+            path: /dev
+      terminationGracePeriodSeconds: 30

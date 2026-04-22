@@ -1,0 +1,34 @@
+################################################################################
+# Phase 01 - Foundation: Example Variable Values
+#
+# Copy this file to terraform.tfvars and adjust values for your environment.
+# Alternatively, set values in config/env/<environment>.tfvars.
+################################################################################
+
+aws_region = "us-east-1"
+aws_az     = "us-east-1a"
+
+vpc_cidr    = "10.100.0.0/21"
+onprem_cidr = "10.200.0.0/21"
+
+domain    = "isaac-lab.internal"
+s3_prefix = "isaac-lab-prod"
+
+environment = "prod"
+
+subnet_cidrs = {
+  gpu_compute    = "10.100.0.0/24"
+  management     = "10.100.1.0/24"
+  infrastructure = "10.100.2.0/24"
+  reserved       = "10.100.3.0/24"
+}
+
+# The DX Gateway must already exist (created by the networking team)
+dx_gateway_id = "dxgw-xxxxxxxx"
+
+tags = {
+  Project     = "isaac-lab"
+  ManagedBy   = "terraform"
+  Phase       = "01-foundation"
+  Environment = "prod"
+}

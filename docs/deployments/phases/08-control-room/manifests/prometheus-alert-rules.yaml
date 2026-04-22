@@ -1,0 +1,118 @@
+################################################################################
+# Prometheus Alert Rules - Isaac Lab
+#
+# PrometheusRule CRD (monitoring.coreos.com/v1) for kube-prometheus-stack.
+#
+# Rule groups:
+#   - isaac-lab-gpu-alerts: GPU temperature and memory alerts (DCGM metrics)
+#   - isaac-lab-training-alerts: Training pipeline stall detection
+#   - isaac-lab-infra-alerts: Node, PVC, and infrastructure alerts
+################################################################################
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: isaac-lab-alerts
+  namespace: monitoring
+  labels:
+    app: kube-prometheus-stack
+    app.kubernetes.io/part-of: isaac-lab
+    app.kubernetes.io/component: control-room
+    # Required label for kube-prometheus-stack to pick up the rule
+    release: kube-prometheus-stack
+spec:
+  groups:
+    # =========================================================================
+    # GPU Alerts (DCGM Exporter Metrics)
+    # =========================================================================
+    - name: isaac-lab-gpu-alerts
+      rules:
+        - alert: GPUTemperatureHigh
+          expr: DCGM_FI_DEV_GPU_TEMP > 85
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "GPU temperature exceeds 85°C on {{ $labels.instance }}"
+            description: >-
+              GPU {{ $labels.gpu }} on node {{ $labels.instance }} has been
+              above 85°C for more than 5 minutes. Current temperature:
+              {{ $value }}°C. Consider checking cooling or reducing workload.
+            runbook_url: "https://docs.isaac-lab.internal/runbooks/gpu-temperature-high"
+
+        - alert: GPUMemoryFull
+          expr: (DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_FREE_AND_USED) * 100 > 95
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "GPU memory usage exceeds 95% on {{ $labels.instance }}"
+            description: >-
+              GPU {{ $labels.gpu }} on node {{ $labels.instance }} has been
+              using more than 95% of framebuffer memory for over 2 minutes.
+              Current usage: {{ printf "%.1f" $value }}%. This may cause
+              OOM errors in training jobs.
+            runbook_url: "https://docs.isaac-lab.internal/runbooks/gpu-memory-full"
+
+    # =========================================================================
+    # Training Alerts
+    # =========================================================================
+    - name: isaac-lab-training-alerts
+      rules:
+        - alert: TrainingStalled
+          expr: |
+            (
+              time() - max by (job_name) (
+                push_time_seconds{job=~"isaac-lab-training.*"}
+              )
+            ) > 1800
+          for: 30m
+          labels:
+            severity: warning
+            team: ml-engineering
+          annotations:
+            summary: "Training job {{ $labels.job_name }} appears stalled"
+            description: >-
+              No metrics have been received from training job
+              {{ $labels.job_name }} for more than 30 minutes. The job may
+              have crashed, hung, or lost connectivity to the metrics endpoint.
+            runbook_url: "https://docs.isaac-lab.internal/runbooks/training-stalled"
+
+    # =========================================================================
+    # Infrastructure Alerts
+    # =========================================================================
+    - name: isaac-lab-infra-alerts
+      rules:
+        - alert: NodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Node {{ $labels.node }} is not ready"
+            description: >-
+              Kubernetes node {{ $labels.node }} has been in a NotReady state
+              for more than 5 minutes. This may affect scheduled workloads
+              and training jobs.
+            runbook_url: "https://docs.isaac-lab.internal/runbooks/node-not-ready"
+
+        - alert: PVCAlmostFull
+          expr: |
+            (
+              kubelet_volume_stats_available_bytes
+              / kubelet_volume_stats_capacity_bytes
+            ) * 100 < 10
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "PVC {{ $labels.persistentvolumeclaim }} in {{ $labels.namespace }} is almost full"
+            description: >-
+              PersistentVolumeClaim {{ $labels.persistentvolumeclaim }} in
+              namespace {{ $labels.namespace }} has less than 10% free space
+              remaining ({{ printf "%.1f" $value }}% available). Consider
+              expanding the volume or cleaning up data.
+            runbook_url: "https://docs.isaac-lab.internal/runbooks/pvc-almost-full"
