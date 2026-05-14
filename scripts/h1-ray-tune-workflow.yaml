@@ -1,0 +1,240 @@
+# OSMO → RayJob Integration Workflow (Phase 2: Ray Tune HPO)
+# Head=CPU role (On-Demand), Workers=GPU (parallel trials).
+# ASHA early-stopping + MLflow parent-child runs.
+#
+# Submit: osmo workflow submit h1-ray-tune-workflow.yaml --pool eks-gpu-robotics
+# For Spot: osmo workflow submit h1-ray-tune-workflow.yaml --pool eks-gpu-spot
+workflow:
+  name: h1-tune
+  tasks:
+  - name: submit-rayjob
+    image: public.ecr.aws/bitnami/kubectl:1.30
+    command:
+    - bash
+    - -c
+    - |
+      set -euo pipefail
+      export REQ_GPU=0
+
+      # --- Configuration ---
+      TASK="Isaac-Velocity-Rough-H1-v0"
+      NUM_ENVS=4096
+      MAX_ITERATIONS=100                       # Max iterations per trial
+      NUM_TRIALS=4                             # Number of HPO trials
+      GRACE_PERIOD=20                          # Min iterations before ASHA early-stop
+      NUM_GPUS=1                               # GPUs per trial
+      NUM_WORKERS=2                            # Parallel trials (= worker replicas)
+      NODE_TYPE="gpu"                          # gpu | gpu-spot | hyperpod-gpu
+      IMAGE="031273582910.dkr.ecr.us-east-1.amazonaws.com/isaac-lab-training:latest"
+      RAY_IMAGE="rayproject/ray:2.42.1-py311"
+      MLFLOW_URI="http://mlflow-tracking.mlflow.svc"
+      PYTHONPATH_ISAAC="/isaac-sim/kit/python/lib/python3.11:/isaac-sim/kit/python/lib/python3.11/site-packages:/isaac-sim/python_packages:/isaac-sim/exts/isaacsim.simulation_app:/isaac-sim/extsDeprecated/omni.isaac.kit:/isaac-sim/kit/kernel/py:/isaac-sim/kit/plugins/bindings-python:/isaac-sim/exts/isaacsim.robot_motion.lula/pip_prebundle:/isaac-sim/exts/isaacsim.asset.exporter.urdf/pip_prebundle:/isaac-sim/extscache/omni.kit.pip_archive-0.0.0+8131b85d.lx64.cp311/pip_prebundle:/isaac-sim/exts/omni.isaac.core_archive/pip_prebundle:/isaac-sim/exts/omni.isaac.ml_archive/pip_prebundle:/isaac-sim/exts/omni.pip.compute/pip_prebundle:/isaac-sim/exts/omni.pip.cloud/pip_prebundle:/workspace/isaaclab"
+
+      # Generate unique job name
+      WF_ID="${OSMO_WORKFLOW_ID:-local}"
+      JOB_NAME="h1-tune-${WF_ID:0:8}-$(date +%s | tail -c 6)"
+
+      # Resource calculation
+      WORKER_CPU=$((4 * NUM_GPUS))
+      WORKER_MEM="$((16 * NUM_GPUS))Gi"
+
+      echo "============================================================"
+      echo "[OSMO → RayJob] Phase 2: Ray Tune HPO"
+      echo "============================================================"
+      echo "  Job:           $JOB_NAME"
+      echo "  Task:          $TASK"
+      echo "  Trials:        $NUM_TRIALS (max $NUM_WORKERS parallel)"
+      echo "  Iter/trial:    $MAX_ITERATIONS (grace: $GRACE_PERIOD)"
+      echo "  GPUs/trial:    $NUM_GPUS"
+      echo "  Workers:       $NUM_WORKERS"
+      echo "  Node pool:     $NODE_TYPE"
+      echo "  Workflow:      $WF_ID"
+      echo "============================================================"
+
+      cat <<EOYAML | kubectl apply -f -
+      apiVersion: ray.io/v1
+      kind: RayJob
+      metadata:
+        name: ${JOB_NAME}
+        namespace: ray-system
+        labels:
+          osmo.workflow_id: "${WF_ID}"
+          app: isaac-lab-training
+          phase: tune
+      spec:
+        entrypoint: >-
+          /isaac-sim/python.sh /home/ray/tune.py
+          --task=${TASK}
+          --num-envs=${NUM_ENVS}
+          --max-iterations=${MAX_ITERATIONS}
+          --num-gpus=${NUM_GPUS}
+          --num-trials=${NUM_TRIALS}
+          --max-concurrent=${NUM_WORKERS}
+          --grace-period=${GRACE_PERIOD}
+        shutdownAfterJobFinishes: true
+        ttlSecondsAfterFinished: 300
+        submitterPodTemplate:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: ray-job-submitter
+              image: ${RAY_IMAGE}
+              resources:
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+                requests:
+                  cpu: "200m"
+                  memory: "256Mi"
+        runtimeEnvYAML: |
+          env_vars:
+            WARP_LOG_LEVEL: "error"
+            MLFLOW_TRACKING_URI: "${MLFLOW_URI}"
+            MLFLOW_EXPERIMENT: "h1-tune"
+            OSMO_WORKFLOW_ID: "${WF_ID}"
+        rayClusterSpec:
+          headGroupSpec:
+            rayStartParams:
+              dashboard-host: "0.0.0.0"
+              num-cpus: "4"
+              num-gpus: "0"
+            template:
+              spec:
+                nodeSelector:
+                  node-type: ${NODE_TYPE}
+                tolerations:
+                - key: nvidia.com/gpu
+                  operator: Exists
+                  effect: NoSchedule
+                containers:
+                - name: ray-head
+                  image: ${IMAGE}
+                  imagePullPolicy: Always
+                  env:
+                  - name: PYTHONPATH
+                    value: "${PYTHONPATH_ISAAC}"
+                  ports:
+                  - containerPort: 6379
+                    name: gcs-server
+                  - containerPort: 8265
+                    name: dashboard
+                  - containerPort: 10001
+                    name: client
+                  resources:
+                    limits:
+                      cpu: "4"
+                      memory: "16Gi"
+                    requests:
+                      cpu: "2"
+                      memory: "8Gi"
+                  volumeMounts:
+                  - name: tune-script
+                    mountPath: /home/ray/tune.py
+                    subPath: tune.py
+                volumes:
+                - name: tune-script
+                  configMap:
+                    name: h1-ray-tune-script
+          workerGroupSpecs:
+          - replicas: ${NUM_WORKERS}
+            minReplicas: 1
+            maxReplicas: ${NUM_WORKERS}
+            groupName: gpu-workers
+            rayStartParams:
+              num-gpus: "${NUM_GPUS}"
+            template:
+              spec:
+                nodeSelector:
+                  node-type: ${NODE_TYPE}
+                tolerations:
+                - key: nvidia.com/gpu
+                  operator: Exists
+                  effect: NoSchedule
+                containers:
+                - name: ray-worker
+                  image: ${IMAGE}
+                  imagePullPolicy: Always
+                  resources:
+                    limits:
+                      cpu: "${WORKER_CPU}"
+                      memory: "${WORKER_MEM}"
+                      nvidia.com/gpu: "${NUM_GPUS}"
+                    requests:
+                      cpu: "${WORKER_CPU}"
+                      memory: "${WORKER_MEM}"
+                      nvidia.com/gpu: "${NUM_GPUS}"
+                  env:
+                  - name: NVIDIA_VISIBLE_DEVICES
+                    value: "all"
+                  - name: PYTHONPATH
+                    value: "${PYTHONPATH_ISAAC}"
+                  volumeMounts:
+                  - name: tune-script
+                    mountPath: /home/ray/tune.py
+                    subPath: tune.py
+                volumes:
+                - name: tune-script
+                  configMap:
+                    name: h1-ray-tune-script
+      EOYAML
+
+      echo "[$(date -u +%H:%M:%S)] RayJob $JOB_NAME created. Waiting for completion..."
+
+      # --- Wait for completion (HPO takes longer) ---
+      TIMEOUT=14400
+      ELAPSED=0
+      LOG_STREAMING=false
+
+      while [ $ELAPSED -lt $TIMEOUT ]; do
+        STATUS=$(kubectl get rayjob "$JOB_NAME" -n ray-system -o jsonpath='{.status.jobDeploymentStatus}' 2>/dev/null || echo "Unknown")
+
+        case "$STATUS" in
+          Complete)
+            kill %1 2>/dev/null || true; wait 2>/dev/null
+            echo ""
+            echo "============================================================"
+            echo "[$(date -u +%H:%M:%S)] RayJob SUCCEEDED (HPO complete)"
+            echo "============================================================"
+            exit 0
+            ;;
+          Failed)
+            kill %1 2>/dev/null || true; wait 2>/dev/null
+            echo ""
+            echo "============================================================"
+            echo "[$(date -u +%H:%M:%S)] RayJob FAILED"
+            echo "============================================================"
+            SUBMITTER_POD=$(kubectl get pods -n ray-system -l "job-name=$JOB_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$SUBMITTER_POD" ]; then
+              kubectl logs "$SUBMITTER_POD" -n ray-system 2>/dev/null | tail -50 || true
+            fi
+            exit 1
+            ;;
+          Running)
+            if [ "$LOG_STREAMING" = "false" ]; then
+              SUBMITTER_POD=$(kubectl get pods -n ray-system -l "job-name=$JOB_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+              if [ -n "$SUBMITTER_POD" ]; then
+                echo "[$(date -u +%H:%M:%S)] Streaming HPO logs..."
+                echo "============================================================"
+                kubectl logs -f "$SUBMITTER_POD" -n ray-system 2>/dev/null &
+                LOG_STREAMING=true
+              fi
+            fi
+            ;;
+          *)
+            echo "[$(date -u +%H:%M:%S)] Status: $STATUS (${ELAPSED}s/${TIMEOUT}s)"
+            ;;
+        esac
+
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+      done
+
+      kill %1 2>/dev/null || true
+      echo "[ERROR] Timeout waiting for RayJob $JOB_NAME after ${TIMEOUT}s"
+      kubectl delete rayjob "$JOB_NAME" -n ray-system 2>/dev/null || true
+      exit 1
+    resources:
+      cpu: 1
+      memory: 1Gi
+      gpu: 0
+      storage: 1Gi

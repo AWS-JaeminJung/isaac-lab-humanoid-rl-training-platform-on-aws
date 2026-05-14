@@ -1,0 +1,157 @@
+# OSMO → RayJob Integration Test
+# Simplified version using Ray GPU image to validate the full flow:
+#   OSMO API → submitter pod (cpu) → RayJob CRD → KubeRay → GPU test
+# Submit: curl -X POST /api/pool/eks-gpu-robotics/workflow -H 'Content-Type: application/json' -d '{"file": "<yaml>"}'
+workflow:
+  name: h1-ray-test
+  tasks:
+  - name: submit-rayjob
+    image: public.ecr.aws/bitnami/kubectl:1.30
+    command:
+    - bash
+    - -c
+    - |
+      set -euo pipefail
+      export REQ_GPU=0
+
+      # --- Configuration ---
+      NODE_TYPE="gpu"
+      RAY_HEAD_IMAGE="rayproject/ray:2.42.1-py310-gpu"
+      RAY_SUBMITTER_IMAGE="rayproject/ray:2.42.1-py310"
+
+      # Generate unique job name
+      WF_ID="${OSMO_WORKFLOW_ID:-local}"
+      JOB_NAME="h1-ray-${WF_ID:0:8}-$(date +%s | tail -c 6)"
+
+      echo "============================================================"
+      echo "[OSMO → RayJob] Integration Test"
+      echo "============================================================"
+      echo "  Job:       $JOB_NAME"
+      echo "  Workflow:  $WF_ID"
+      echo "  Node pool: $NODE_TYPE"
+      echo "============================================================"
+
+      # --- Create RayJob CRD ---
+      cat <<EOYAML | kubectl apply -f -
+      apiVersion: ray.io/v1
+      kind: RayJob
+      metadata:
+        name: ${JOB_NAME}
+        namespace: ray-system
+        labels:
+          osmo.workflow_id: "${WF_ID}"
+      spec:
+        entrypoint: |
+          python -c "
+          import ray, subprocess
+          ray.init()
+          resources = ray.cluster_resources()
+          print(f'Ray nodes: {len(ray.nodes())}')
+          print(f'Cluster GPU: {resources.get(\"GPU\", 0)}')
+          result = subprocess.run(['nvidia-smi', '-L'], capture_output=True, text=True)
+          print(f'GPU info: {result.stdout.strip()}')
+
+          @ray.remote(num_gpus=1)
+          def gpu_task():
+              import subprocess
+              r = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], capture_output=True, text=True)
+              return r.stdout.strip()
+
+          print(f'Ray GPU task: {ray.get(gpu_task.remote())}')
+          print('OSMO RayJob Integration Test PASSED')
+          "
+        shutdownAfterJobFinishes: true
+        ttlSecondsAfterFinished: 120
+        submitterPodTemplate:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: ray-job-submitter
+              image: ${RAY_SUBMITTER_IMAGE}
+              resources:
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+                requests:
+                  cpu: "200m"
+                  memory: "256Mi"
+        rayClusterSpec:
+          headGroupSpec:
+            rayStartParams:
+              dashboard-host: "0.0.0.0"
+            template:
+              spec:
+                nodeSelector:
+                  node-type: ${NODE_TYPE}
+                tolerations:
+                - key: nvidia.com/gpu
+                  operator: Exists
+                  effect: NoSchedule
+                containers:
+                - name: ray-head
+                  image: ${RAY_HEAD_IMAGE}
+                  ports:
+                  - containerPort: 6379
+                    name: gcs-server
+                  - containerPort: 8265
+                    name: dashboard
+                  resources:
+                    limits:
+                      cpu: "2"
+                      memory: "8Gi"
+                      nvidia.com/gpu: "1"
+                    requests:
+                      cpu: "2"
+                      memory: "8Gi"
+                      nvidia.com/gpu: "1"
+                  env:
+                  - name: NVIDIA_VISIBLE_DEVICES
+                    value: "all"
+      EOYAML
+
+      echo "[$(date -u +%H:%M:%S)] RayJob $JOB_NAME created. Waiting..."
+
+      # --- Poll for completion ---
+      TIMEOUT=600
+      INTERVAL=10
+      ELAPSED=0
+
+      while [ $ELAPSED -lt $TIMEOUT ]; do
+        STATUS=$(kubectl get rayjob "$JOB_NAME" -n ray-system -o jsonpath='{.status.jobDeploymentStatus}' 2>/dev/null || echo "Unknown")
+
+        case "$STATUS" in
+          Complete)
+            echo "[$(date -u +%H:%M:%S)] RayJob SUCCEEDED"
+            SUBMITTER=$(kubectl get pods -n ray-system -l "job-name=$JOB_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$SUBMITTER" ]; then
+              echo "============================================================"
+              echo "[RayJob Logs]"
+              echo "============================================================"
+              kubectl logs "$SUBMITTER" -n ray-system 2>/dev/null | tail -30 || true
+            fi
+            exit 0
+            ;;
+          Failed)
+            echo "[$(date -u +%H:%M:%S)] RayJob FAILED"
+            SUBMITTER=$(kubectl get pods -n ray-system -l "job-name=$JOB_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$SUBMITTER" ]; then
+              kubectl logs "$SUBMITTER" -n ray-system 2>/dev/null | tail -30 || true
+            fi
+            exit 1
+            ;;
+          *)
+            echo "[$(date -u +%H:%M:%S)] Status: $STATUS (${ELAPSED}s/${TIMEOUT}s)"
+            ;;
+        esac
+
+        sleep $INTERVAL
+        ELAPSED=$((ELAPSED + INTERVAL))
+      done
+
+      echo "[ERROR] Timeout after ${TIMEOUT}s"
+      exit 1
+    resources:
+      cpu: 1
+      memory: 1Gi
+      gpu: 0
+      storage: 1Gi

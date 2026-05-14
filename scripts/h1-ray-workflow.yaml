@@ -1,0 +1,238 @@
+# OSMO → RayJob Integration Workflow (Phase 1: TorchTrainer)
+# Head=CPU (On-Demand), Worker=GPU (any pool).
+# Checkpoint + Fault Tolerance via Ray TorchTrainer.
+#
+# Submit: curl -X POST /api/pool/<pool>/workflow -d @h1-ray-workflow.yaml
+# Pool routing: NODE_TYPE controls GPU pool (gpu/gpu-spot/hyperpod-gpu/hybrid-gpu)
+workflow:
+  name: h1-ray
+  tasks:
+  - name: submit-rayjob
+    image: public.ecr.aws/bitnami/kubectl:1.30
+    command:
+    - bash
+    - -c
+    - |
+      set -euo pipefail
+      export REQ_GPU=0
+
+      # --- Configuration ---
+      TASK="Isaac-Velocity-Rough-H1-v0"
+      NUM_ENVS=4096
+      MAX_ITERATIONS=10
+      NUM_GPUS=1                            # GPUs per worker (1=single, 4=multi-GPU)
+      CHECKPOINT_INTERVAL=50                # Save checkpoint every N iterations (0=final only)
+      NODE_TYPE="gpu"                       # gpu | gpu-spot | hyperpod-gpu | hybrid-gpu
+      IMAGE="031273582910.dkr.ecr.us-east-1.amazonaws.com/isaac-lab-training:latest"
+      RAY_IMAGE="rayproject/ray:2.42.1-py311"
+      MLFLOW_URI="http://mlflow-tracking.mlflow.svc"
+
+      # Generate unique job name from OSMO workflow ID
+      WF_ID="${OSMO_WORKFLOW_ID:-local}"
+      JOB_NAME="h1-ray-${WF_ID:0:8}-$(date +%s | tail -c 6)"
+
+      echo "============================================================"
+      echo "[OSMO → RayJob] Phase 1: TorchTrainer"
+      echo "============================================================"
+      echo "  Job:        $JOB_NAME"
+      echo "  Task:       $TASK"
+      echo "  Envs:       $NUM_ENVS"
+      echo "  Iterations: $MAX_ITERATIONS"
+      echo "  GPUs:       $NUM_GPUS"
+      echo "  Checkpoint: every $CHECKPOINT_INTERVAL iter"
+      echo "  Node pool:  $NODE_TYPE"
+      echo "  Head:       CPU (On-Demand)"
+      echo "  Workflow:   $WF_ID"
+      echo "============================================================"
+
+      # --- CPU/GPU resource calculation ---
+      WORKER_CPU=$((4 * NUM_GPUS))
+      WORKER_MEM="$((16 * NUM_GPUS))Gi"
+
+      # --- Create RayJob CRD ---
+      cat <<EOYAML | kubectl apply -f -
+      apiVersion: ray.io/v1
+      kind: RayJob
+      metadata:
+        name: ${JOB_NAME}
+        namespace: ray-system
+        labels:
+          osmo.workflow_id: "${WF_ID}"
+          app: isaac-lab-training
+          phase: torchtrainer
+      spec:
+        entrypoint: >-
+          /isaac-sim/python.sh /home/ray/train.py
+          --task=${TASK}
+          --num-envs=${NUM_ENVS}
+          --max-iterations=${MAX_ITERATIONS}
+          --num-gpus=${NUM_GPUS}
+          --checkpoint-interval=${CHECKPOINT_INTERVAL}
+        shutdownAfterJobFinishes: true
+        ttlSecondsAfterFinished: 300
+        submitterPodTemplate:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: ray-job-submitter
+              image: ${RAY_IMAGE}
+              resources:
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+                requests:
+                  cpu: "200m"
+                  memory: "256Mi"
+        runtimeEnvYAML: |
+          env_vars:
+            WARP_LOG_LEVEL: "error"
+            MLFLOW_TRACKING_URI: "${MLFLOW_URI}"
+            MLFLOW_EXPERIMENT: "h1-rayjob"
+            OSMO_WORKFLOW_ID: "${WF_ID}"
+        rayClusterSpec:
+          headGroupSpec:
+            rayStartParams:
+              dashboard-host: "0.0.0.0"
+              num-cpus: "4"
+              num-gpus: "0"
+            template:
+              spec:
+                nodeSelector:
+                  node-type: ${NODE_TYPE}
+                tolerations:
+                - key: nvidia.com/gpu
+                  operator: Exists
+                  effect: NoSchedule
+                containers:
+                - name: ray-head
+                  image: ${IMAGE}
+                  imagePullPolicy: Always
+                  env:
+                  - name: PYTHONPATH
+                    value: "/isaac-sim/kit/python/lib/python3.11:/isaac-sim/kit/python/lib/python3.11/site-packages:/isaac-sim/python_packages:/isaac-sim/exts/isaacsim.simulation_app:/isaac-sim/extsDeprecated/omni.isaac.kit:/isaac-sim/kit/kernel/py:/isaac-sim/kit/plugins/bindings-python:/isaac-sim/exts/isaacsim.robot_motion.lula/pip_prebundle:/isaac-sim/exts/isaacsim.asset.exporter.urdf/pip_prebundle:/isaac-sim/extscache/omni.kit.pip_archive-0.0.0+8131b85d.lx64.cp311/pip_prebundle:/isaac-sim/exts/omni.isaac.core_archive/pip_prebundle:/isaac-sim/exts/omni.isaac.ml_archive/pip_prebundle:/isaac-sim/exts/omni.pip.compute/pip_prebundle:/isaac-sim/exts/omni.pip.cloud/pip_prebundle:/workspace/isaaclab"
+                  ports:
+                  - containerPort: 6379
+                    name: gcs-server
+                  - containerPort: 8265
+                    name: dashboard
+                  - containerPort: 10001
+                    name: client
+                  resources:
+                    limits:
+                      cpu: "4"
+                      memory: "16Gi"
+                    requests:
+                      cpu: "2"
+                      memory: "8Gi"
+                  volumeMounts:
+                  - name: train-script
+                    mountPath: /home/ray/train.py
+                    subPath: train.py
+                volumes:
+                - name: train-script
+                  configMap:
+                    name: h1-ray-train-script
+          workerGroupSpecs:
+          - replicas: 1
+            minReplicas: 1
+            maxReplicas: 1
+            groupName: gpu-workers
+            rayStartParams:
+              num-gpus: "${NUM_GPUS}"
+            template:
+              spec:
+                nodeSelector:
+                  node-type: ${NODE_TYPE}
+                tolerations:
+                - key: nvidia.com/gpu
+                  operator: Exists
+                  effect: NoSchedule
+                containers:
+                - name: ray-worker
+                  image: ${IMAGE}
+                  imagePullPolicy: Always
+                  resources:
+                    limits:
+                      cpu: "${WORKER_CPU}"
+                      memory: "${WORKER_MEM}"
+                      nvidia.com/gpu: "${NUM_GPUS}"
+                    requests:
+                      cpu: "${WORKER_CPU}"
+                      memory: "${WORKER_MEM}"
+                      nvidia.com/gpu: "${NUM_GPUS}"
+                  env:
+                  - name: NVIDIA_VISIBLE_DEVICES
+                    value: "all"
+                  - name: PYTHONPATH
+                    value: "/isaac-sim/kit/python/lib/python3.11:/isaac-sim/kit/python/lib/python3.11/site-packages:/isaac-sim/python_packages:/isaac-sim/exts/isaacsim.simulation_app:/isaac-sim/extsDeprecated/omni.isaac.kit:/isaac-sim/kit/kernel/py:/isaac-sim/kit/plugins/bindings-python:/isaac-sim/exts/isaacsim.robot_motion.lula/pip_prebundle:/isaac-sim/exts/isaacsim.asset.exporter.urdf/pip_prebundle:/isaac-sim/extscache/omni.kit.pip_archive-0.0.0+8131b85d.lx64.cp311/pip_prebundle:/isaac-sim/exts/omni.isaac.core_archive/pip_prebundle:/isaac-sim/exts/omni.isaac.ml_archive/pip_prebundle:/isaac-sim/exts/omni.pip.compute/pip_prebundle:/isaac-sim/exts/omni.pip.cloud/pip_prebundle:/workspace/isaaclab"
+                  volumeMounts:
+                  - name: train-script
+                    mountPath: /home/ray/train.py
+                    subPath: train.py
+                volumes:
+                - name: train-script
+                  configMap:
+                    name: h1-ray-train-script
+      EOYAML
+
+      echo "[$(date -u +%H:%M:%S)] RayJob $JOB_NAME created. Waiting for completion..."
+
+      # --- Wait for Ray cluster to become ready ---
+      echo "[$(date -u +%H:%M:%S)] Waiting for Ray cluster..."
+      TIMEOUT=7200
+      ELAPSED=0
+      LOG_STREAMING=false
+
+      while [ $ELAPSED -lt $TIMEOUT ]; do
+        STATUS=$(kubectl get rayjob "$JOB_NAME" -n ray-system -o jsonpath='{.status.jobDeploymentStatus}' 2>/dev/null || echo "Unknown")
+
+        case "$STATUS" in
+          Complete)
+            kill %1 2>/dev/null || true; wait 2>/dev/null
+            echo ""
+            echo "============================================================"
+            echo "[$(date -u +%H:%M:%S)] RayJob SUCCEEDED"
+            echo "============================================================"
+            exit 0
+            ;;
+          Failed)
+            kill %1 2>/dev/null || true; wait 2>/dev/null
+            echo ""
+            echo "============================================================"
+            echo "[$(date -u +%H:%M:%S)] RayJob FAILED"
+            echo "============================================================"
+            SUBMITTER_POD=$(kubectl get pods -n ray-system -l "job-name=$JOB_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$SUBMITTER_POD" ]; then
+              kubectl logs "$SUBMITTER_POD" -n ray-system 2>/dev/null | tail -30 || true
+            fi
+            exit 1
+            ;;
+          Running)
+            if [ "$LOG_STREAMING" = "false" ]; then
+              SUBMITTER_POD=$(kubectl get pods -n ray-system -l "job-name=$JOB_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+              if [ -n "$SUBMITTER_POD" ]; then
+                echo "[$(date -u +%H:%M:%S)] Streaming training logs..."
+                echo "============================================================"
+                kubectl logs -f "$SUBMITTER_POD" -n ray-system 2>/dev/null &
+                LOG_STREAMING=true
+              fi
+            fi
+            ;;
+          *)
+            echo "[$(date -u +%H:%M:%S)] Status: $STATUS (${ELAPSED}s/${TIMEOUT}s)"
+            ;;
+        esac
+
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+      done
+
+      kill %1 2>/dev/null || true
+      echo "[ERROR] Timeout waiting for RayJob $JOB_NAME after ${TIMEOUT}s"
+      kubectl delete rayjob "$JOB_NAME" -n ray-system 2>/dev/null || true
+      exit 1
+    resources:
+      cpu: 1
+      memory: 1Gi
+      gpu: 0
+      storage: 1Gi

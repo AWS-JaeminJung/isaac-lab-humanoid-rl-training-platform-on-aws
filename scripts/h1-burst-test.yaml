@@ -1,0 +1,90 @@
+# GPU Burst Test: 12 GPU (3 parallel groups × 4 GPU)
+# On-Demand (8 GPU) fills first, overflow goes to Karpenter burst.
+# Submit: curl -X POST .../api/pool/eks-gpu-research/workflow -d @h1-burst-test.yaml
+#
+# v2 groups with no upstream_groups → all groups start in parallel
+version: 2
+workflow:
+  name: h1-burst-test
+  groups:
+  - name: worker-1
+    tasks:
+    - name: gpu-worker-1
+      lead: true
+      image: nvidia/cuda:12.4.0-base-ubuntu22.04
+      environment:
+        REQ_GPU: "4"
+      command:
+      - bash
+      - -c
+      - |
+        echo "============================================"
+        echo "[Worker 1] GPU Burst Test"
+        echo "============================================"
+        echo "  Hostname: $(hostname)"
+        echo "  Time:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "  GPUs:"
+        nvidia-smi -L 2>/dev/null || echo "  nvidia-smi not available"
+        echo "============================================"
+        echo "[Worker 1] Simulating work for 180s..."
+        sleep 180
+        echo "[Worker 1] Done"
+      resources:
+        cpu: 16
+        memory: 64Gi
+        gpu: 4
+        storage: 10Gi
+  - name: worker-2
+    tasks:
+    - name: gpu-worker-2
+      lead: true
+      image: nvidia/cuda:12.4.0-base-ubuntu22.04
+      environment:
+        REQ_GPU: "4"
+      command:
+      - bash
+      - -c
+      - |
+        echo "============================================"
+        echo "[Worker 2] GPU Burst Test"
+        echo "============================================"
+        echo "  Hostname: $(hostname)"
+        echo "  Time:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "  GPUs:"
+        nvidia-smi -L 2>/dev/null || echo "  nvidia-smi not available"
+        echo "============================================"
+        echo "[Worker 2] Simulating work for 180s..."
+        sleep 180
+        echo "[Worker 2] Done"
+      resources:
+        cpu: 16
+        memory: 64Gi
+        gpu: 4
+        storage: 10Gi
+  - name: worker-3
+    tasks:
+    - name: gpu-worker-3
+      lead: true
+      image: nvidia/cuda:12.4.0-base-ubuntu22.04
+      environment:
+        REQ_GPU: "4"
+      command:
+      - bash
+      - -c
+      - |
+        echo "============================================"
+        echo "[Worker 3] GPU Burst Test"
+        echo "============================================"
+        echo "  Hostname: $(hostname)"
+        echo "  Time:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "  GPUs:"
+        nvidia-smi -L 2>/dev/null || echo "  nvidia-smi not available"
+        echo "============================================"
+        echo "[Worker 3] Simulating work for 180s..."
+        sleep 180
+        echo "[Worker 3] Done"
+      resources:
+        cpu: 16
+        memory: 64Gi
+        gpu: 4
+        storage: 10Gi

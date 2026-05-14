@@ -1,0 +1,78 @@
+# RayJob: GPU test with official Ray image
+# Verifies: KubeRay operator, GPU scheduling, Ray cluster formation
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: ray-gpu-test
+  namespace: ray-system
+spec:
+  entrypoint: |
+    python -c "
+    import ray, subprocess, os
+    ray.init()
+    print(f'Ray nodes: {len(ray.nodes())}')
+    resources = ray.cluster_resources()
+    print(f'Cluster resources: {resources}')
+    gpu_count = resources.get('GPU', 0)
+    print(f'Cluster GPU count: {gpu_count}')
+    # Test CUDA via nvidia-smi
+    result = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], capture_output=True, text=True)
+    print(f'nvidia-smi: {result.stdout.strip()}')
+    # Test Ray GPU task
+    @ray.remote(num_gpus=1)
+    def gpu_task():
+        import subprocess
+        r = subprocess.run(['nvidia-smi', '-L'], capture_output=True, text=True)
+        return r.stdout.strip()
+    gpu_info = ray.get(gpu_task.remote())
+    print(f'Ray GPU task result: {gpu_info}')
+    print('Ray GPU test PASSED')
+    "
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 120
+  # Use lightweight CPU image for the submitter pod (only calls Ray API)
+  submitterPodTemplate:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: ray-job-submitter
+        image: rayproject/ray:2.42.1-py310
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+  rayClusterSpec:
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+      template:
+        spec:
+          nodeSelector:
+            node-type: gpu
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - name: ray-head
+            image: rayproject/ray:2.42.1-py310-gpu
+            ports:
+            - containerPort: 6379
+              name: gcs-server
+            - containerPort: 8265
+              name: dashboard
+            resources:
+              limits:
+                cpu: "2"
+                memory: "8Gi"
+                nvidia.com/gpu: "1"
+              requests:
+                cpu: "2"
+                memory: "8Gi"
+                nvidia.com/gpu: "1"
+            env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"

@@ -1,0 +1,92 @@
+# RayJob: Isaac Lab H1 Distributed Training
+# Usage: kubectl apply -f h1-rayjob.yaml
+# Config: NUM_WORKERS x GPUS_PER_WORKER GPUs total
+# Pool routing: set nodeSelector to gpu, gpu-spot, or hyperpod-gpu
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: h1-rayjob
+  namespace: ray-system
+spec:
+  entrypoint: >-
+    python /home/ray/train.py
+    --task=Isaac-Velocity-Rough-H1-v0
+    --num-envs=4096
+    --max-iterations=10
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 300
+  runtimeEnvYAML: |
+    env_vars:
+      WARP_LOG_LEVEL: "error"
+      MLFLOW_TRACKING_URI: "http://mlflow-tracking.mlflow.svc/mlflow"
+  rayClusterSpec:
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+      template:
+        spec:
+          nodeSelector:
+            node-type: gpu
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - name: ray-head
+            image: 031273582910.dkr.ecr.us-east-1.amazonaws.com/isaac-lab-training:latest
+            ports:
+            - containerPort: 6379
+              name: gcs-server
+            - containerPort: 8265
+              name: dashboard
+            - containerPort: 10001
+              name: client
+            resources:
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+                nvidia.com/gpu: "1"
+              requests:
+                cpu: "4"
+                memory: "16Gi"
+                nvidia.com/gpu: "1"
+            env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            volumeMounts:
+            - name: train-script
+              mountPath: /home/ray/train.py
+              subPath: train.py
+          volumes:
+          - name: train-script
+            configMap:
+              name: h1-ray-train-script
+    workerGroupSpecs:
+    - replicas: 1
+      minReplicas: 1
+      maxReplicas: 4
+      groupName: gpu-workers
+      rayStartParams: {}
+      template:
+        spec:
+          nodeSelector:
+            node-type: gpu
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          containers:
+          - name: ray-worker
+            image: 031273582910.dkr.ecr.us-east-1.amazonaws.com/isaac-lab-training:latest
+            resources:
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+                nvidia.com/gpu: "1"
+              requests:
+                cpu: "4"
+                memory: "16Gi"
+                nvidia.com/gpu: "1"
+            env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"

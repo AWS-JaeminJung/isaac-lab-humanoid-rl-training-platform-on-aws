@@ -1,0 +1,463 @@
+# ConfigMap: Ray Tune HPO script for Isaac Lab H1
+# Phase 2: ASHA scheduler + MLflow parent-child runs + best model registration
+# Usage: kubectl apply -f h1-ray-tune-script.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: h1-ray-tune-script
+  namespace: ray-system
+data:
+  tune.py: |
+    #!/usr/bin/env python3
+    """Isaac Lab H1 HPO via Ray Tune + TorchTrainer.
+
+    Phase 2: ASHA early-stopping, MLflow parent-child runs.
+    Tunes PPO hyperparameters by patching rsl_rl config file at runtime.
+
+    Usage:
+      /isaac-sim/python.sh tune.py --task=Isaac-Velocity-Rough-H1-v0 \
+        --num-trials=8 --max-iterations=200 --num-gpus=1
+    """
+    import argparse
+    import os
+    import sys
+    import time
+    import re
+    import subprocess
+    import shutil
+    import glob as glob_module
+    import tempfile
+    import json
+
+    def parse_args():
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--task", default="Isaac-Velocity-Rough-H1-v0")
+        parser.add_argument("--num-envs", type=int, default=4096)
+        parser.add_argument("--max-iterations", type=int, default=200,
+                            help="Max iterations per trial")
+        parser.add_argument("--num-gpus", type=int, default=1)
+        parser.add_argument("--num-trials", type=int, default=8,
+                            help="Number of HPO trials")
+        parser.add_argument("--max-concurrent", type=int, default=0,
+                            help="Max concurrent trials (0=auto)")
+        parser.add_argument("--grace-period", type=int, default=30,
+                            help="ASHA min iterations before early stop")
+        parser.add_argument("--checkpoint-path", default=None)
+        return parser.parse_args()
+
+    _CFG_TEMPLATE = (
+        "from isaaclab.utils import configclass\n"
+        "from isaaclab_rl.rsl_rl import "
+        "RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg\n"
+        "\n"
+        "\n"
+        "@configclass\n"
+        "class H1RoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):\n"
+        "    num_steps_per_env = {num_steps_per_env}\n"
+        "    max_iterations = {max_iterations}\n"
+        "    save_interval = 50\n"
+        '    experiment_name = "{experiment_name}"\n'
+        "    empirical_normalization = False\n"
+        "    policy = RslRlPpoActorCriticCfg(\n"
+        "        init_noise_std=1.0,\n"
+        "        actor_hidden_dims=[512, 256, 128],\n"
+        "        critic_hidden_dims=[512, 256, 128],\n"
+        '        activation="elu",\n'
+        "    )\n"
+        "    algorithm = RslRlPpoAlgorithmCfg(\n"
+        "        value_loss_coef=1.0,\n"
+        "        use_clipped_value_loss=True,\n"
+        "        clip_param={clip_param},\n"
+        "        entropy_coef={entropy_coef},\n"
+        "        num_learning_epochs={num_learning_epochs},\n"
+        "        num_mini_batches={num_mini_batches},\n"
+        "        learning_rate={learning_rate},\n"
+        '        schedule="adaptive",\n'
+        "        gamma={gamma},\n"
+        "        lam={lam},\n"
+        "        desired_kl=0.01,\n"
+        "        max_grad_norm=1.0,\n"
+        "    )\n"
+        "\n"
+        "\n"
+        "@configclass\n"
+        "class H1FlatPPORunnerCfg(H1RoughPPORunnerCfg):\n"
+        "    def __post_init__(self):\n"
+        "        super().__post_init__()\n"
+        "        self.max_iterations = 1000\n"
+        '        self.experiment_name = "h1_flat"\n'
+        "        self.policy.actor_hidden_dims = [128, 128, 128]\n"
+        "        self.policy.critic_hidden_dims = [128, 128, 128]\n"
+    )
+
+    def _patch_rsl_rl_config(cfg_path, trial_id, max_iterations,
+                              learning_rate, entropy_coef, clip_param,
+                              num_learning_epochs, num_mini_batches,
+                              gamma, lam, num_steps_per_env):
+        patched = _CFG_TEMPLATE.format(
+            num_steps_per_env=num_steps_per_env,
+            max_iterations=max_iterations,
+            experiment_name=f"h1_rough_{trial_id}",
+            clip_param=clip_param,
+            entropy_coef=entropy_coef,
+            num_learning_epochs=num_learning_epochs,
+            num_mini_batches=num_mini_batches,
+            learning_rate=learning_rate,
+            gamma=gamma,
+            lam=lam,
+        )
+        with open(cfg_path, "w") as f:
+            f.write(patched)
+
+    def find_latest_checkpoint(log_dir):
+        if not os.path.exists(log_dir):
+            return None
+        runs = sorted(os.listdir(log_dir))
+        if not runs:
+            return None
+        latest = os.path.join(log_dir, runs[-1])
+        pt_files = sorted(glob_module.glob(os.path.join(latest, "model_*.pt")))
+        return latest if pt_files else None
+
+    def train_func(config):
+        """Training function for each HPO trial."""
+        import ray.train
+
+        task = config["task"]
+        num_envs = config["num_envs"]
+        max_iterations = config["max_iterations"]
+        num_gpus = config["num_gpus"]
+        trial_id = ray.train.get_context().get_trial_id() or "local"
+
+        # HPO parameters to tune
+        learning_rate = config.get("learning_rate", 1e-3)
+        entropy_coef = config.get("entropy_coef", 0.01)
+        clip_param = config.get("clip_param", 0.2)
+        num_learning_epochs = config.get("num_learning_epochs", 5)
+        num_mini_batches = config.get("num_mini_batches", 4)
+        gamma = config.get("gamma", 0.99)
+        lam = config.get("lam", 0.95)
+        num_steps_per_env = config.get("num_steps_per_env", 24)
+
+        # Use unique log dir per trial to avoid conflicts
+        log_dir = f"logs/rsl_rl/h1_rough_{trial_id}"
+
+        os.chdir("/workspace/isaaclab")
+        os.makedirs("/isaac-sim/kit/data/Kit/Isaac-Sim/5.0/pip3-envs/default", exist_ok=True)
+        os.environ["WARP_LOG_LEVEL"] = "error"
+
+        # --- Patch rsl_rl config file with HPO parameters ---
+        cfg_path = (
+            "source/isaaclab_tasks/isaaclab_tasks/manager_based/"
+            "locomotion/velocity/config/h1/agents/rsl_rl_ppo_cfg.py"
+        )
+        _patch_rsl_rl_config(
+            cfg_path, trial_id, max_iterations,
+            learning_rate, entropy_coef, clip_param,
+            num_learning_epochs, num_mini_batches,
+            gamma, lam, num_steps_per_env,
+        )
+        print(f"[Config Patch] lr={learning_rate:.1e} ent={entropy_coef:.4f} "
+              f"clip={clip_param:.3f} epochs={num_learning_epochs} "
+              f"mini_b={num_mini_batches} gamma={gamma:.4f} "
+              f"lam={lam:.3f} steps={num_steps_per_env}")
+
+        # Build training command
+        cmd = ["/isaac-sim/python.sh"]
+
+        if num_gpus > 1:
+            cmd.extend(["-m", "torch.distributed.run",
+                        f"--nproc_per_node={num_gpus}", "--standalone"])
+
+        cmd.extend([
+            "scripts/reinforcement_learning/rsl_rl/train.py",
+            f"--task={task}",
+            f"--num_envs={num_envs}",
+            f"--max_iterations={max_iterations}",
+            f"--experiment_name=h1_rough_{trial_id}",
+            "--headless",
+        ])
+
+        if num_gpus > 1:
+            cmd.append("--distributed")
+
+        print("=" * 60)
+        print(f"[Tune Trial {trial_id}]")
+        print(f"  lr={learning_rate:.1e} ent={entropy_coef:.4f} "
+              f"clip={clip_param:.2f} epochs={num_learning_epochs}")
+        print(f"  gamma={gamma:.3f} lam={lam:.3f} "
+              f"steps={num_steps_per_env} mini_batches={num_mini_batches}")
+        print(f"  Command: {' '.join(cmd)}")
+        print("=" * 60)
+
+        # Run training
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1
+        )
+
+        iteration = 0
+        metrics = {}
+
+        for line in process.stdout:
+            print(line, end="")
+
+            if "Mean reward" in line:
+                m = re.search(r"Mean reward:\s*([-\d.]+)", line)
+                if m:
+                    metrics["mean_reward"] = float(m.group(1))
+            if "Mean episode length" in line:
+                m = re.search(r"Mean episode length:\s*([-\d.]+)", line)
+                if m:
+                    metrics["mean_episode_length"] = float(m.group(1))
+            if "base_contact" in line:
+                m = re.search(r"base_contact:\s*([-\d.]+)", line)
+                if m:
+                    metrics["base_contact_pct"] = float(m.group(1))
+            if "time_out" in line and "Episode_Termination" in line:
+                m = re.search(r"time_out:\s*([-\d.]+)", line)
+                if m:
+                    metrics["timeout_pct"] = float(m.group(1))
+            if "Iteration time" in line:
+                m = re.search(r"Iteration time:\s*([\d.]+)", line)
+                if m:
+                    metrics["iteration_time_sec"] = float(m.group(1))
+                    iteration += 1
+                    metrics["iteration"] = iteration
+                    ray.train.report(metrics=dict(metrics))
+                    metrics.pop("iteration_time_sec", None)
+
+        process.wait()
+
+        # Final report with checkpoint
+        final_metrics = {"exit_code": process.returncode, "total_iterations": iteration}
+        final_metrics.update(metrics)
+
+        ckpt_dir = find_latest_checkpoint(log_dir)
+        if ckpt_dir:
+            from ray.train import Checkpoint
+            ray.train.report(
+                metrics=final_metrics,
+                checkpoint=Checkpoint.from_directory(ckpt_dir),
+            )
+        else:
+            # Fallback: check default log dir
+            ckpt_dir = find_latest_checkpoint("logs/rsl_rl/h1_rough")
+            if ckpt_dir:
+                from ray.train import Checkpoint
+                ray.train.report(
+                    metrics=final_metrics,
+                    checkpoint=Checkpoint.from_directory(ckpt_dir),
+                )
+            else:
+                ray.train.report(metrics=final_metrics)
+
+    def main():
+        args = parse_args()
+
+        import ray
+        from ray import tune
+        from ray.train.torch import TorchTrainer
+        from ray.train import ScalingConfig, RunConfig, CheckpointConfig, FailureConfig
+        from ray.tune.schedulers import ASHAScheduler
+
+        storage_path = args.checkpoint_path
+        if storage_path is None:
+            if os.path.isdir("/mnt/fsx"):
+                storage_path = "/mnt/fsx/ray-checkpoints"
+            else:
+                storage_path = "s3://osmo-k8s-workflow-bucket-jm/ray-checkpoints/"
+
+        # --- Search Space ---
+        search_space = {
+            "task": args.task,
+            "num_envs": args.num_envs,
+            "max_iterations": args.max_iterations,
+            "num_gpus": args.num_gpus,
+            # HPO parameters
+            "learning_rate": tune.loguniform(1e-4, 5e-3),
+            "entropy_coef": tune.loguniform(0.001, 0.05),
+            "clip_param": tune.uniform(0.1, 0.3),
+            "num_learning_epochs": tune.choice([3, 5, 8]),
+            "num_mini_batches": tune.choice([2, 4, 8]),
+            "gamma": tune.uniform(0.95, 0.999),
+            "lam": tune.uniform(0.9, 0.99),
+            "num_steps_per_env": tune.choice([16, 24, 32, 48]),
+        }
+
+        # --- ASHA Scheduler (early stop bad trials) ---
+        scheduler = ASHAScheduler(
+            metric="mean_reward",
+            mode="max",
+            max_t=args.max_iterations,
+            grace_period=args.grace_period,
+            reduction_factor=3,
+        )
+
+        print("=" * 60)
+        print("[Phase 2] Ray Tune HPO")
+        print("=" * 60)
+        print(f"  Task:           {args.task}")
+        print(f"  Trials:         {args.num_trials}")
+        print(f"  Max iterations: {args.max_iterations}")
+        print(f"  Grace period:   {args.grace_period}")
+        print(f"  GPUs/trial:     {args.num_gpus}")
+        print(f"  Storage:        {storage_path}")
+        print("=" * 60)
+        print("  Search space:")
+        print(f"    learning_rate:  loguniform(1e-4, 5e-3)")
+        print(f"    entropy_coef:   loguniform(0.001, 0.05)")
+        print(f"    clip_param:     uniform(0.1, 0.3)")
+        print(f"    num_epochs:     choice([3, 5, 8])")
+        print(f"    mini_batches:   choice([2, 4, 8])")
+        print(f"    gamma:          uniform(0.95, 0.999)")
+        print(f"    lam:            uniform(0.9, 0.99)")
+        print(f"    steps_per_env:  choice([16, 24, 32, 48])")
+        print("=" * 60)
+
+        trainer = TorchTrainer(
+            train_loop_per_worker=train_func,
+            scaling_config=ScalingConfig(
+                num_workers=1,
+                use_gpu=True,
+                resources_per_worker={"GPU": args.num_gpus, "CPU": 3 * args.num_gpus},
+                trainer_resources={"CPU": 0},
+            ),
+        )
+
+        tuner = tune.Tuner(
+            trainer,
+            param_space={"train_loop_config": search_space},
+            tune_config=tune.TuneConfig(
+                scheduler=scheduler,
+                num_samples=args.num_trials,
+                max_concurrent_trials=args.max_concurrent or None,
+            ),
+            run_config=RunConfig(
+                name=f"h1-tune-{args.task.split('-')[-2]}",
+                storage_path=storage_path,
+                checkpoint_config=CheckpointConfig(
+                    num_to_keep=2,
+                    checkpoint_score_attribute="mean_reward",
+                    checkpoint_score_order="max",
+                ),
+                failure_config=FailureConfig(max_failures=1),
+            ),
+        )
+
+        results = tuner.fit()
+
+        # --- MLflow: parent run + best model ---
+        print("=" * 60)
+        print("[MLflow] Uploading HPO results")
+        print("=" * 60)
+
+        import mlflow
+        from mlflow.tracking import MlflowClient
+
+        tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow-tracking.mlflow.svc")
+        experiment_name = os.environ.get("MLFLOW_EXPERIMENT", "h1-tune")
+
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(experiment_name)
+        client = MlflowClient()
+
+        # Parent run for the entire sweep
+        with mlflow.start_run(run_name=f"sweep-{os.environ.get('RAY_JOB_ID', 'local')}") as parent_run:
+            mlflow.log_params({
+                "task": args.task,
+                "num_trials": args.num_trials,
+                "max_iterations": args.max_iterations,
+                "grace_period": args.grace_period,
+                "num_gpus": args.num_gpus,
+                "scheduler": "ASHA",
+                "runtime": "ray-tune",
+            })
+
+            # Log each trial as child run
+            for i, result in enumerate(results):
+                trial_config = result.config.get("train_loop_config", {})
+                trial_metrics = result.metrics or {}
+
+                with mlflow.start_run(
+                    run_name=f"trial-{i:02d}",
+                    nested=True,
+                ) as child_run:
+                    # Log HPO params
+                    hpo_params = {k: trial_config[k] for k in [
+                        "learning_rate", "entropy_coef", "clip_param",
+                        "num_learning_epochs", "num_mini_batches",
+                        "gamma", "lam", "num_steps_per_env",
+                    ] if k in trial_config}
+                    mlflow.log_params(hpo_params)
+
+                    # Log metrics
+                    for k, v in trial_metrics.items():
+                        if isinstance(v, (int, float)):
+                            mlflow.log_metric(k, v)
+
+                    print(f"  Trial {i}: reward={trial_metrics.get('mean_reward', 'N/A')}, "
+                          f"lr={hpo_params.get('learning_rate', 'N/A'):.1e}, "
+                          f"ent={hpo_params.get('entropy_coef', 'N/A')}")
+
+            # Best trial
+            best = results.get_best_result(metric="mean_reward", mode="max")
+            if best and best.metrics:
+                best_config = best.config.get("train_loop_config", {})
+                best_metrics = best.metrics
+
+                mlflow.log_metric("best_mean_reward", best_metrics.get("mean_reward", 0))
+                mlflow.log_metric("best_episode_length", best_metrics.get("mean_episode_length", 0))
+                mlflow.log_metric("best_base_contact_pct", best_metrics.get("base_contact_pct", 0))
+
+                best_params = {f"best_{k}": best_config[k] for k in [
+                    "learning_rate", "entropy_coef", "clip_param",
+                    "num_learning_epochs", "num_mini_batches",
+                    "gamma", "lam", "num_steps_per_env",
+                ] if k in best_config}
+                mlflow.log_params(best_params)
+
+                # Save best config as artifact
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                    json.dump({k: best_config[k] for k in [
+                        "learning_rate", "entropy_coef", "clip_param",
+                        "num_learning_epochs", "num_mini_batches",
+                        "gamma", "lam", "num_steps_per_env",
+                    ] if k in best_config}, f, indent=2)
+                    mlflow.log_artifact(f.name, artifact_path="best_config")
+
+                print(f"\n  Best trial: reward={best_metrics.get('mean_reward')}")
+                print(f"    {best_params}")
+
+                # Upload best checkpoint and register model
+                if best.checkpoint:
+                    with best.checkpoint.as_directory() as ckpt_dir:
+                        pt_files = sorted(glob_module.glob(os.path.join(ckpt_dir, "model_*.pt")))
+                        if pt_files:
+                            staging = tempfile.mkdtemp()
+                            shutil.copy2(pt_files[-1], staging)
+                            mlflow.log_artifacts(staging, artifact_path="model")
+                            print(f"  Uploaded: {os.path.basename(pt_files[-1])}")
+
+                    try:
+                        try:
+                            client.create_registered_model(experiment_name)
+                        except Exception:
+                            pass
+                        mv = client.create_model_version(
+                            name=experiment_name,
+                            source=f"runs:/{parent_run.info.run_id}/model",
+                            run_id=parent_run.info.run_id,
+                        )
+                        print(f"  Model registered: {experiment_name} v{mv.version}")
+                    except Exception as e:
+                        print(f"  Registration skipped: {e}")
+            else:
+                print("  WARNING: No successful trials")
+
+        print("=" * 60)
+        print("[Done] HPO complete")
+        print("=" * 60)
+
+    if __name__ == "__main__":
+        main()

@@ -1,0 +1,330 @@
+# ConfigMap: Ray TorchTrainer script for Isaac Lab H1
+# Phase 1: Checkpoint + Fault Tolerance + Head CPU
+# Usage: kubectl apply -f h1-ray-train-script.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: h1-ray-train-script
+  namespace: ray-system
+data:
+  train.py: |
+    #!/usr/bin/env python3
+    """Isaac Lab H1 training via Ray TorchTrainer.
+
+    Phase 1: Head=CPU, Workers=GPU. Checkpoint to S3/FSx.
+    Fault tolerance via FailureConfig (Spot recovery).
+
+    Single GPU:  --num-gpus=1 → 1 worker, no DDP
+    Multi-GPU:   --num-gpus=4 → 1 worker with 4 GPUs, torchrun --standalone
+    Multi-node:  future (Phase 1.5)
+    """
+    import argparse
+    import os
+    import sys
+    import time
+    import re
+    import subprocess
+    import shutil
+    import glob as glob_module
+    import tempfile
+
+    def parse_args():
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--task", default="Isaac-Velocity-Rough-H1-v0")
+        parser.add_argument("--num-envs", type=int, default=4096)
+        parser.add_argument("--max-iterations", type=int, default=10)
+        parser.add_argument("--num-gpus", type=int, default=1)
+        parser.add_argument("--checkpoint-interval", type=int, default=50,
+                            help="Save checkpoint every N iterations (0=final only)")
+        parser.add_argument("--checkpoint-path", default=None,
+                            help="S3 or FSx path for checkpoints")
+        return parser.parse_args()
+
+    def find_latest_checkpoint(log_dir):
+        """Find the latest rsl_rl checkpoint directory."""
+        if not os.path.exists(log_dir):
+            return None
+        runs = sorted(os.listdir(log_dir))
+        if not runs:
+            return None
+        latest = os.path.join(log_dir, runs[-1])
+        pt_files = sorted(glob_module.glob(os.path.join(latest, "model_*.pt")))
+        if pt_files:
+            return latest
+        return None
+
+    def get_last_iteration(ckpt_dir):
+        """Extract iteration number from latest model_N.pt."""
+        pt_files = sorted(glob_module.glob(os.path.join(ckpt_dir, "model_*.pt")))
+        if pt_files:
+            m = re.search(r"model_(\d+)\.pt", pt_files[-1])
+            if m:
+                return int(m.group(1))
+        return 0
+
+    def train_func(config):
+        """Training function executed on each worker."""
+        import ray.train
+
+        task = config["task"]
+        num_envs = config["num_envs"]
+        max_iterations = config["max_iterations"]
+        num_gpus = config["num_gpus"]
+        checkpoint_interval = config["checkpoint_interval"]
+        log_dir = "logs/rsl_rl/h1_rough"
+
+        os.chdir("/workspace/isaaclab")
+        os.makedirs("/isaac-sim/kit/data/Kit/Isaac-Sim/5.0/pip3-envs/default", exist_ok=True)
+        os.environ["WARP_LOG_LEVEL"] = "error"
+
+        # --- Restore from checkpoint (Spot recovery) ---
+        resume_args = []
+        restored_iter = 0
+        checkpoint = ray.train.get_checkpoint()
+        if checkpoint:
+            with checkpoint.as_directory() as ckpt_dir:
+                restore_dir = "/tmp/restored_checkpoint"
+                if os.path.exists(restore_dir):
+                    shutil.rmtree(restore_dir)
+                shutil.copytree(ckpt_dir, restore_dir)
+                restored_iter = get_last_iteration(restore_dir)
+                # rsl_rl's --resume and --load_run expect the parent dir + run name
+                os.makedirs(log_dir, exist_ok=True)
+                restore_link = os.path.join(log_dir, "restored")
+                if os.path.exists(restore_link):
+                    os.remove(restore_link)
+                os.symlink(restore_dir, restore_link)
+                resume_args = ["--resume=True", f"--load_run=restored"]
+                print(f"[TorchTrainer] Restored checkpoint at iteration {restored_iter}")
+
+        # --- Build training command ---
+        cmd = ["/isaac-sim/python.sh"]
+
+        if num_gpus > 1:
+            # Multi-GPU on single node: torchrun --standalone
+            cmd.extend([
+                "-m", "torch.distributed.run",
+                f"--nproc_per_node={num_gpus}",
+                "--standalone",
+            ])
+
+        cmd.extend([
+            "scripts/reinforcement_learning/rsl_rl/train.py",
+            f"--task={task}",
+            f"--num_envs={num_envs}",
+            f"--max_iterations={max_iterations}",
+            "--headless",
+        ])
+
+        if num_gpus > 1:
+            cmd.append("--distributed")
+
+        cmd.extend(resume_args)
+
+        print("=" * 60)
+        print(f"[TorchTrainer] Training: {num_gpus} GPU(s)")
+        print(f"  Command: {' '.join(cmd)}")
+        if restored_iter > 0:
+            print(f"  Resuming from iteration {restored_iter}")
+        print("=" * 60)
+
+        # --- Run training with checkpoint reporting ---
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1
+        )
+
+        iteration = restored_iter
+        metrics = {}
+
+        for line in process.stdout:
+            print(line, end="")
+
+            # Parse metrics from rsl_rl output
+            if "Mean reward" in line:
+                m = re.search(r"Mean reward:\s*([-\d.]+)", line)
+                if m:
+                    metrics["mean_reward"] = float(m.group(1))
+            if "Mean episode length" in line:
+                m = re.search(r"Mean episode length:\s*([-\d.]+)", line)
+                if m:
+                    metrics["mean_episode_length"] = float(m.group(1))
+            if "base_contact" in line:
+                m = re.search(r"base_contact:\s*([-\d.]+)", line)
+                if m:
+                    metrics["base_contact_pct"] = float(m.group(1))
+            if "time_out" in line and "Episode_Termination" in line:
+                m = re.search(r"time_out:\s*([-\d.]+)", line)
+                if m:
+                    metrics["timeout_pct"] = float(m.group(1))
+            if "Iteration time" in line:
+                m = re.search(r"Iteration time:\s*([\d.]+)", line)
+                if m:
+                    metrics["iteration_time_sec"] = float(m.group(1))
+                    iteration += 1
+                    metrics["iteration"] = iteration
+
+                    # Save checkpoint at interval
+                    if checkpoint_interval > 0 and iteration % checkpoint_interval == 0:
+                        ckpt_dir = find_latest_checkpoint(log_dir)
+                        if ckpt_dir:
+                            from ray.train import Checkpoint
+                            ray.train.report(
+                                metrics=dict(metrics),
+                                checkpoint=Checkpoint.from_directory(ckpt_dir),
+                            )
+                            print(f"[TorchTrainer] Checkpoint saved at iteration {iteration}")
+                            continue
+
+            # Report metrics without checkpoint
+            if metrics.get("iteration_time_sec"):
+                ray.train.report(metrics=dict(metrics))
+                metrics.pop("iteration_time_sec", None)
+
+        process.wait()
+        print(f"[TorchTrainer] Training exit code: {process.returncode}")
+
+        # --- Final checkpoint ---
+        final_metrics = {
+            "exit_code": process.returncode,
+            "total_iterations": iteration,
+        }
+        final_metrics.update(metrics)
+
+        ckpt_dir = find_latest_checkpoint(log_dir)
+        if ckpt_dir:
+            from ray.train import Checkpoint
+            ray.train.report(
+                metrics=final_metrics,
+                checkpoint=Checkpoint.from_directory(ckpt_dir),
+            )
+            print(f"[TorchTrainer] Final checkpoint saved at iteration {iteration}")
+        else:
+            ray.train.report(metrics=final_metrics)
+
+    def main():
+        args = parse_args()
+
+        import ray
+        from ray.train.torch import TorchTrainer
+        from ray.train import ScalingConfig, RunConfig, CheckpointConfig, FailureConfig
+
+        # Checkpoint storage: S3 default, FSx if mounted
+        storage_path = args.checkpoint_path
+        if storage_path is None:
+            if os.path.isdir("/mnt/fsx"):
+                storage_path = "/mnt/fsx/ray-checkpoints"
+            else:
+                storage_path = "s3://osmo-k8s-workflow-bucket-jm/ray-checkpoints/"
+
+        print("=" * 60)
+        print("[Phase 1] Ray TorchTrainer")
+        print("=" * 60)
+        print(f"  Task:        {args.task}")
+        print(f"  Envs:        {args.num_envs}")
+        print(f"  Iterations:  {args.max_iterations}")
+        print(f"  GPUs:        {args.num_gpus}")
+        print(f"  Checkpoint:  every {args.checkpoint_interval} iter → {storage_path}")
+        print(f"  Fault tol:   max 3 failures (Spot recovery)")
+        print("=" * 60)
+
+        trainer = TorchTrainer(
+            train_loop_per_worker=train_func,
+            train_loop_config={
+                "task": args.task,
+                "num_envs": args.num_envs,
+                "max_iterations": args.max_iterations,
+                "num_gpus": args.num_gpus,
+                "checkpoint_interval": args.checkpoint_interval,
+            },
+            scaling_config=ScalingConfig(
+                num_workers=1,
+                use_gpu=True,
+                resources_per_worker={"GPU": args.num_gpus, "CPU": 3 * args.num_gpus},
+                trainer_resources={"CPU": 0},
+            ),
+            run_config=RunConfig(
+                name=f"h1-{args.task.split('-')[-2]}",
+                storage_path=storage_path,
+                checkpoint_config=CheckpointConfig(
+                    num_to_keep=3,
+                    checkpoint_score_attribute="mean_reward",
+                    checkpoint_score_order="max",
+                ),
+                failure_config=FailureConfig(
+                    max_failures=3,
+                ),
+            ),
+        )
+
+        result = trainer.fit()
+
+        # --- MLflow upload (runs on Head, after training) ---
+        print("=" * 60)
+        print("[MLflow] Uploading results")
+        print("=" * 60)
+
+        import mlflow
+        from mlflow.tracking import MlflowClient
+
+        tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow-tracking.mlflow.svc")
+        workflow_name = os.environ.get("MLFLOW_EXPERIMENT", "h1-rayjob")
+
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(workflow_name)
+
+        with mlflow.start_run(run_name=f"ray-{os.environ.get('RAY_JOB_ID', 'local')}"):
+            mlflow.log_params({
+                "task": args.task,
+                "num_envs": args.num_envs,
+                "max_iterations": args.max_iterations,
+                "num_gpus": args.num_gpus,
+                "algorithm": "PPO",
+                "framework": "rsl_rl",
+                "runtime": "ray-torchtrainer",
+                "checkpoint_interval": args.checkpoint_interval,
+                "storage_path": storage_path,
+            })
+
+            # Log final metrics
+            if result.metrics:
+                for k, v in result.metrics.items():
+                    if isinstance(v, (int, float)):
+                        mlflow.log_metric(k, v)
+                print(f"  Metrics: {result.metrics}")
+
+            # Upload best checkpoint as model artifact
+            if result.checkpoint:
+                with result.checkpoint.as_directory() as ckpt_dir:
+                    pt_files = sorted(glob_module.glob(os.path.join(ckpt_dir, "model_*.pt")))
+                    if pt_files:
+                        staging = tempfile.mkdtemp()
+                        shutil.copy2(pt_files[-1], staging)
+                        mlflow.log_artifacts(staging, artifact_path="model")
+                        print(f"  Uploaded: {os.path.basename(pt_files[-1])}")
+
+                    # Register model
+                    try:
+                        client = MlflowClient()
+                        run_id = mlflow.active_run().info.run_id
+                        try:
+                            client.create_registered_model(workflow_name)
+                        except Exception:
+                            pass
+                        mv = client.create_model_version(
+                            name=workflow_name,
+                            source=f"runs:/{run_id}/model",
+                            run_id=run_id,
+                        )
+                        print(f"  Model registered: {workflow_name} v{mv.version}")
+                    except Exception as e:
+                        print(f"  Registration skipped: {e}")
+            else:
+                print("  WARNING: No checkpoint available")
+
+        print("=" * 60)
+        print("[Done] Training complete")
+        print("=" * 60)
+
+    if __name__ == "__main__":
+        main()

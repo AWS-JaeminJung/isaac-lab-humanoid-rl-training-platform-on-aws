@@ -1,0 +1,31 @@
+# KAI Scheduler - Low Priority GPU Holder
+# Submit FIRST to occupy GPUs, then submit h1-kai-preempt.yaml with HIGH priority
+# The high-priority job should preempt this low-priority holder
+workflow:
+  name: h1-kai-low-priority
+  tasks:
+  - name: gpu-hold
+    image: 031273582910.dkr.ecr.us-east-1.amazonaws.com/isaac-lab-training:latest
+    environment:
+      REQ_GPU: "4"
+    command:
+    - bash
+    - -c
+    - |
+      echo "============================================================"
+      echo "[LOW PRIORITY] GPU Holder - occupying 4 GPUs"
+      echo "  This job will be preempted by high-priority workloads"
+      echo "============================================================"
+      nvidia-smi -L
+      echo "Holding GPUs for 30 minutes..."
+      for i in $(seq 1 1800); do
+        if [ $((i % 60)) -eq 0 ]; then echo "  Running... $((i/60))min elapsed"; fi
+        sleep 1
+      done
+      echo "GPU holder finished normally"
+      exit 0
+    resources:
+      cpu: 16
+      memory: 64Gi
+      gpu: 4
+      storage: 10Gi

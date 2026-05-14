@@ -1,0 +1,26 @@
+# KAI Scheduler - Low Priority GPU Holder B (fills GPUs for preemption demo)
+workflow:
+  name: h1-kai-low-b
+  tasks:
+  - name: gpu-hold-b
+    image: 031273582910.dkr.ecr.us-east-1.amazonaws.com/isaac-lab-training:latest
+    environment:
+      REQ_GPU: "4"
+    command:
+    - bash
+    - -c
+    - |
+      echo "============================================================"
+      echo "[LOW PRIORITY - B] GPU Holder - occupying 4 GPUs"
+      echo "============================================================"
+      nvidia-smi -L
+      for i in $(seq 1 1800); do
+        if [ $((i % 60)) -eq 0 ]; then echo "  Running... $((i/60))min elapsed"; fi
+        sleep 1
+      done
+      exit 0
+    resources:
+      cpu: 16
+      memory: 64Gi
+      gpu: 4
+      storage: 10Gi

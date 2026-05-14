@@ -1,0 +1,263 @@
+# Multi Node, Multi GPU (On-Demand) - 2 Nodes x 2 GPUs = 4 GPUs total
+# Submit: curl -X POST /api/pool/eks-gpu-robotics/workflow
+# Master (worker-0) publishes IP to S3, worker-1 discovers and joins via c10d rendezvous
+workflow:
+  name: h1-multi-node
+  tasks:
+  - name: worker-0
+    image: 031273582910.dkr.ecr.us-east-1.amazonaws.com/isaac-lab-training:latest
+    environment:
+      REQ_GPU: "2"
+    command:
+    - bash
+    - -c
+    - |
+      cd /workspace/isaaclab
+      mkdir -p /isaac-sim/kit/data/Kit/Isaac-Sim/5.0/pip3-envs/default
+      export WARP_LOG_LEVEL=error
+      MASTER_IP=$(hostname -i)
+      WF_ID=${OSMO_WORKFLOW_ID:-h1-multi-node}
+      NUM_GPUS=2
+      NUM_NODES=2
+      NUM_ENVS=8192
+      MAX_ITERS=10
+      TASK="Isaac-Velocity-Rough-H1-v0"
+      S3_BUCKET="osmo-k8s-workflow-bucket-jm"
+
+      echo "============================================================"
+      echo "[worker-0] Master Node Setup"
+      echo "  Master IP: ${MASTER_IP}"
+      echo "  Config: ${NUM_NODES} nodes x ${NUM_GPUS} GPUs = $((NUM_NODES*NUM_GPUS)) total"
+      echo "============================================================"
+      nvidia-smi -L
+
+      # Publish master IP to S3 for worker discovery
+      /isaac-sim/python.sh -c "
+      import boto3
+      boto3.client('s3').put_object(
+          Bucket='${S3_BUCKET}',
+          Key='rendezvous/${WF_ID}/master_ip',
+          Body='${MASTER_IP}')
+      print('Master IP published to S3')
+      "
+
+      export NCCL_SOCKET_IFNAME=eth0
+      export NCCL_IB_DISABLE=1
+      export NCCL_P2P_DISABLE=1
+      export NCCL_DEBUG=WARN
+      export NCCL_TIMEOUT=600
+
+      # Run training with MLflow integration
+      /isaac-sim/python.sh -c "
+      import os, sys, subprocess, re, time, mlflow
+
+      TRACKING_URI = 'http://mlflow-tracking.mlflow.svc/mlflow'
+      WORKFLOW_NAME = 'h1-multi-node'
+      WORKFLOW_ID = os.environ.get('OSMO_WORKFLOW_ID', WORKFLOW_NAME)
+      MASTER_IP = '${MASTER_IP}'
+      TASK = '${TASK}'
+      NUM_ENVS = ${NUM_ENVS}
+      MAX_ITERATIONS = ${MAX_ITERS}
+      NUM_GPUS = ${NUM_GPUS}
+      NUM_NODES = ${NUM_NODES}
+
+      print('=' * 60)
+      print('[STEP 1/4] Environment Setup')
+      print('=' * 60)
+      t0 = time.time()
+      print(f'  Workflow: {WORKFLOW_ID}')
+      print(f'  Config: {NUM_NODES} nodes x {NUM_GPUS} GPUs, On-Demand')
+      print(f'  Rendezvous: {MASTER_IP}:29500')
+      mlflow.set_tracking_uri(TRACKING_URI)
+      mlflow.set_experiment(WORKFLOW_NAME)
+
+      with mlflow.start_run(run_name=WORKFLOW_ID):
+          mlflow.log_params({
+              'task': TASK, 'num_envs': NUM_ENVS,
+              'max_iterations': MAX_ITERATIONS,
+              'algorithm': 'PPO', 'framework': 'rsl_rl',
+              'num_gpus': NUM_GPUS, 'num_nodes': NUM_NODES,
+              'total_gpus': NUM_GPUS * NUM_NODES,
+              'distributed': True, 'capacity_type': 'on-demand',
+              'workflow_id': WORKFLOW_ID,
+          })
+
+          print('=' * 60)
+          print(f'[STEP 2/4] Training (torchrun {NUM_NODES}x{NUM_GPUS} GPUs)')
+          print('=' * 60)
+          t1 = time.time()
+
+          import socket
+          local_ip = socket.gethostbyname(socket.gethostname())
+          cmd = ['/isaac-sim/python.sh', '-m', 'torch.distributed.run',
+              '--rdzv_backend=c10d', f'--rdzv_endpoint={MASTER_IP}:29500',
+              f'--rdzv_id={WORKFLOW_ID}',
+              f'--nnodes={NUM_NODES}', f'--nproc_per_node={NUM_GPUS}',
+              f'--local-addr={local_ip}',
+              'scripts/reinforcement_learning/rsl_rl/train.py',
+              f'--task={TASK}', f'--num_envs={NUM_ENVS}',
+              f'--max_iterations={MAX_ITERATIONS}', '--headless', '--distributed']
+
+          process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1)
+
+          iteration = 0
+          for line in process.stdout:
+              print(line, end='')
+              if 'Mean reward' in line:
+                  m = re.search(r'Mean reward:\s*([-\d.]+)', line)
+                  if m: mlflow.log_metric('mean_reward', float(m.group(1)), step=iteration)
+              if 'Mean episode length' in line:
+                  m = re.search(r'Mean episode length:\s*([-\d.]+)', line)
+                  if m: mlflow.log_metric('mean_episode_length', float(m.group(1)), step=iteration)
+              if 'Iteration time' in line:
+                  m = re.search(r'Iteration time:\s*([\d.]+)', line)
+                  if m:
+                      mlflow.log_metric('iteration_time_sec', float(m.group(1)), step=iteration)
+                      iteration += 1
+
+          process.wait()
+          print(f'  torchrun exit code: {process.returncode}')
+          mlflow.log_metric('exit_code', process.returncode)
+          mlflow.log_metric('training_time_sec', time.time() - t1)
+
+          print('=' * 60)
+          print('[STEP 3/4] MLflow Upload')
+          print('=' * 60)
+
+          import torch, shutil, glob, tempfile
+          log_dir = 'logs/rsl_rl/h1_rough'
+          if os.path.exists(log_dir):
+              runs = sorted(os.listdir(log_dir))
+              if runs:
+                  model_dir = os.path.join(log_dir, runs[-1])
+                  files = os.listdir(model_dir)
+                  print(f'  Found {len(files)} files in {model_dir}')
+                  pt_files = sorted(glob.glob(os.path.join(model_dir, 'model_*.pt')))
+                  if pt_files:
+                      best_ckpt = pt_files[-1]
+                      print(f'  Uploading: {best_ckpt}')
+                      staging = tempfile.mkdtemp()
+                      shutil.copy2(best_ckpt, staging)
+                      with open(os.path.join(staging, 'MLmodel'), 'w') as mf:
+                          mf.write(f'artifact_path: model\nflavors:\n  pytorch:\n    model_data: {os.path.basename(best_ckpt)}\n    pytorch_version: {torch.__version__}\nmodel_size_bytes: {os.path.getsize(best_ckpt)}\n')
+                      mlflow.log_artifacts(staging, artifact_path='model')
+                  else:
+                      mlflow.log_artifacts(model_dir, artifact_path='model')
+                  for f in files:
+                      fpath = os.path.join(model_dir, f)
+                      if not f.endswith('.pt') and os.path.isfile(fpath):
+                          mlflow.log_artifact(fpath, artifact_path='model/extras')
+                  osmo_out = '/osmo/data/output/model'
+                  os.makedirs(osmo_out, exist_ok=True)
+                  for f in files:
+                      src, dst = os.path.join(model_dir, f), os.path.join(osmo_out, f)
+                      if os.path.isdir(src): shutil.copytree(src, dst, dirs_exist_ok=True)
+                      else: shutil.copy2(src, dst)
+                  try:
+                      mlflow.register_model(f'runs:/{mlflow.active_run().info.run_id}/model', WORKFLOW_NAME)
+                      print(f'  Model registered: {WORKFLOW_NAME}')
+                  except Exception as e:
+                      print(f'  Registration skipped: {e}')
+          else:
+              print(f'  WARNING: {log_dir} not found')
+
+          print('=' * 60)
+          print('[STEP 4/4] Done')
+          print('=' * 60)
+          total = time.time() - t0
+          mlflow.log_metric('total_duration_sec', total)
+          print(f'  MLflow run: {mlflow.active_run().info.run_id}')
+          print(f'  Duration: {total:.1f}s')
+      sys.exit(0)
+      " || true
+
+      # Cleanup rendezvous key
+      /isaac-sim/python.sh -c "
+      import boto3
+      boto3.client('s3').delete_object(
+          Bucket='${S3_BUCKET}',
+          Key='rendezvous/${WF_ID}/master_ip')
+      print('Rendezvous key cleaned up')
+      " 2>/dev/null
+      exit 0
+    resources:
+      cpu: 8
+      memory: 32Gi
+      gpu: 2
+      storage: 50Gi
+  - name: worker-1
+    image: 031273582910.dkr.ecr.us-east-1.amazonaws.com/isaac-lab-training:latest
+    environment:
+      REQ_GPU: "2"
+    command:
+    - bash
+    - -c
+    - |
+      cd /workspace/isaaclab
+      mkdir -p /isaac-sim/kit/data/Kit/Isaac-Sim/5.0/pip3-envs/default
+      export WARP_LOG_LEVEL=error
+      WF_ID=${OSMO_WORKFLOW_ID:-h1-multi-node}
+      NUM_GPUS=2
+      NUM_NODES=2
+      NUM_ENVS=8192
+      MAX_ITERS=10
+      TASK="Isaac-Velocity-Rough-H1-v0"
+      S3_BUCKET="osmo-k8s-workflow-bucket-jm"
+
+      echo "============================================================"
+      echo "[worker-1] Waiting for master..."
+      echo "============================================================"
+      nvidia-smi -L
+
+      # Poll S3 for master IP
+      MASTER_IP=""
+      for i in $(seq 1 120); do
+        MASTER_IP=$(/isaac-sim/python.sh -c "
+      try:
+          import boto3
+          r = boto3.client('s3').get_object(Bucket='${S3_BUCKET}', Key='rendezvous/${WF_ID}/master_ip')
+          print(r['Body'].read().decode().strip(), end='')
+      except: pass
+      " 2>/dev/null)
+        if [ -n "${MASTER_IP}" ]; then
+          echo "Master discovered: ${MASTER_IP}"
+          break
+        fi
+        echo "  Attempt ${i}/120 - waiting 3s..."
+        sleep 3
+      done
+
+      if [ -z "${MASTER_IP}" ]; then
+        echo "ERROR: Could not discover master after 360s"
+        exit 1
+      fi
+
+      export NCCL_SOCKET_IFNAME=eth0
+      export NCCL_IB_DISABLE=1
+      export NCCL_P2P_DISABLE=1
+      export NCCL_DEBUG=WARN
+      export NCCL_TIMEOUT=600
+
+      echo "============================================================"
+      echo "[worker-1] Joining training: ${MASTER_IP}:29500"
+      echo "============================================================"
+
+      LOCAL_IP=$(hostname -i)
+      /isaac-sim/python.sh -m torch.distributed.run \
+        --rdzv_backend=c10d \
+        --rdzv_endpoint=${MASTER_IP}:29500 \
+        --rdzv_id=${WF_ID} \
+        --nnodes=${NUM_NODES} \
+        --nproc_per_node=${NUM_GPUS} \
+        --local-addr=${LOCAL_IP} \
+        scripts/reinforcement_learning/rsl_rl/train.py \
+        --task=${TASK} --num_envs=${NUM_ENVS} \
+        --max_iterations=${MAX_ITERS} --headless --distributed
+
+      echo "Worker-1 done: $?"
+    resources:
+      cpu: 8
+      memory: 32Gi
+      gpu: 2
+      storage: 50Gi
